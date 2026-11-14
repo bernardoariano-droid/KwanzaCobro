@@ -7,7 +7,7 @@ import {
   mapUtilizadorRow,
   PRESERVED_SUPER_ADMIN_EMAIL,
   PRESERVED_SUPER_ADMIN_UUID,
-} from '../_supabase.js';
+} from '../../_supabase.js';
 
 /**
  * POST /api/auth/register

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { authenticateRequest, mapUtilizadorRow, normalizeServerRole } from '../_supabase.js';
+import { authenticateRequest, mapUtilizadorRow, normalizeServerRole } from '../../_supabase.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {

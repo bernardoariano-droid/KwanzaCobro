@@ -6,7 +6,7 @@ import {
   PRESERVED_SUPER_ADMIN_EMAIL,
   PRESERVED_SUPER_ADMIN_UUID,
   sanitizeSupabaseUrl,
-} from '../_supabase.js';
+} from '../../_supabase.js';
 
 const TARGET_UUID = PRESERVED_SUPER_ADMIN_UUID; // 8b9f3c41-c996-4764-87c2-9d82411584e1
 const TARGET_EMAIL = PRESERVED_SUPER_ADMIN_EMAIL; // bamidia@gmail.com

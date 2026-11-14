@@ -1,18 +1,18 @@
-import healthHandler from '../../api/health.js';
-import authMeHandler from '../../api/auth/me.js';
-import authRegisterHandler from '../../api/auth/register.js';
-import adminUsersHandler from '../../api/admin/users.js';
-import adminCompaniesHandler from '../../api/admin/companies.js';
-import resetSuperAdminPasswordHandler from '../../api/admin/reset-super-admin-password.js';
-import supabaseStatusHandler from '../../api/supabase/status.js';
-import supabasePullHandler from '../../api/supabase/pull.js';
-import supabaseSyncHandler from '../../api/supabase/sync.js';
-import supabaseSchemaHandler from '../../api/supabase/schema.js';
-import dataIndexHandler from '../../api/data/index.js';
-import dataSyncHandler from '../../api/data/sync.js';
-import smsSendHandler from '../../api/sms/send-verification.js';
-import smsVerifyHandler from '../../api/sms/verify-code.js';
-import smsReceiptHandler from '../../api/sms/verify-receipt.js';
+import healthHandler from '../../api/_handlers/health.js';
+import authMeHandler from '../../api/_handlers/auth/me.js';
+import authRegisterHandler from '../../api/_handlers/auth/register.js';
+import adminUsersHandler from '../../api/_handlers/admin/users.js';
+import adminCompaniesHandler from '../../api/_handlers/admin/companies.js';
+import resetSuperAdminPasswordHandler from '../../api/_handlers/admin/reset-super-admin-password.js';
+import supabaseStatusHandler from '../../api/_handlers/supabase/status.js';
+import supabasePullHandler from '../../api/_handlers/supabase/pull.js';
+import supabaseSyncHandler from '../../api/_handlers/supabase/sync.js';
+import supabaseSchemaHandler from '../../api/_handlers/supabase/schema.js';
+import dataIndexHandler from '../../api/_handlers/data/index.js';
+import dataSyncHandler from '../../api/_handlers/data/sync.js';
+import smsSendHandler from '../../api/_handlers/sms/send-verification.js';
+import smsVerifyHandler from '../../api/_handlers/sms/verify-code.js';
+import smsReceiptHandler from '../../api/_handlers/sms/verify-receipt.js';
 
 interface NetlifyEvent {
   path?: string;

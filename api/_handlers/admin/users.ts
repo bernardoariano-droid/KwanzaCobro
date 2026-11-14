@@ -6,7 +6,7 @@ import {
   normalizeServerRole,
   PRESERVED_SUPER_ADMIN_EMAIL,
   PRESERVED_SUPER_ADMIN_UUID,
-} from '../_supabase.js';
+} from '../../_supabase.js';
 
 function isProtectedSuperAdmin(userId?: string | null, email?: string | null): boolean {
   const cleanId = String(userId || '').trim().toLowerCase();

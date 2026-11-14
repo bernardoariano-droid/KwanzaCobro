@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import crypto from 'crypto';
-import { authenticateRequest, getAdminSupabase, PRESERVED_SUPER_ADMIN_UUID } from '../_supabase.js';
+import { authenticateRequest, getAdminSupabase, PRESERVED_SUPER_ADMIN_UUID } from '../../_supabase.js';
 
 async function upsertCompanyWithAdaptiveFallback(
   db: any,

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { globalConfirmedTransactions } from './_session.js';
-import { getBackendSupabase } from '../_supabase.js';
+import { getBackendSupabase } from '../../_supabase.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {

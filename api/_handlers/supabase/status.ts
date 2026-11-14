@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getAnonSupabase, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_PROJECT_REF } from '../_supabase.js';
+import { getAnonSupabase, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_PROJECT_REF } from '../../_supabase.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const start = Date.now();

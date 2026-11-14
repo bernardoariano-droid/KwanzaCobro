@@ -14,6 +14,7 @@ export default defineConfig(() => {
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg', 'assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'],
         workbox: {
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\/api\//],
         },
         manifest: {
           id: '/',

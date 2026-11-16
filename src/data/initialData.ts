@@ -1,6 +1,6 @@
 import { Client, Seller, Debt, CompanySettings, AuthUser } from '../types/debt';
 
-export const PRESERVED_SUPER_ADMIN_EMAIL = 'bamidia@gmail.com';
+export const PRESERVED_SUPER_ADMIN_EMAIL = 'bernardoariano@gmail.com';
 export const PRESERVED_SUPER_ADMIN_UUID = '8b9f3c41-c996-4764-87c2-9d82411584e1';
 
 export const initialCompanySettings: CompanySettings = {

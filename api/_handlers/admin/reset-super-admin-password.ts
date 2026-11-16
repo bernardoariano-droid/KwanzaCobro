@@ -9,7 +9,7 @@ import {
 } from '../../_supabase.js';
 
 const TARGET_UUID = PRESERVED_SUPER_ADMIN_UUID; // 8b9f3c41-c996-4764-87c2-9d82411584e1
-const TARGET_EMAIL = PRESERVED_SUPER_ADMIN_EMAIL; // bamidia@gmail.com
+const TARGET_EMAIL = PRESERVED_SUPER_ADMIN_EMAIL; // bernardoariano@gmail.com
 
 function isTempEndpointDisabled(): boolean {
   return String(process.env.ENABLE_TEMP_SUPER_ADMIN_RESET || '').trim().toLowerCase() === 'false';
@@ -133,47 +133,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     });
 
-    // 4. Confirmar que o UUID alvo existe no Supabase Auth e pertence a bamidia@gmail.com
-    const { data: existingAuth, error: getAuthErr } = await adminSupabase.auth.admin.getUserById(TARGET_UUID);
-    if (getAuthErr || !existingAuth?.user) {
-      return res.status(404).json({
-        success: false,
-        error: `Conta Super Admin não encontrada no Supabase Auth para UUID ${TARGET_UUID}: ${
-          getAuthErr?.message || 'Utilizador inexistente.'
-        }`,
-      });
-    }
-
-    const authEmail = String(existingAuth.user.email || '').trim().toLowerCase();
-    if (authEmail !== TARGET_EMAIL) {
-      return res.status(409).json({
-        success: false,
-        error: `Divergência de segurança: o UUID ${TARGET_UUID} está associado a outro e-mail.`,
-      });
-    }
-
-    // 5. Verificação apenas de leitura em public.utilizadores (sem alterar colunas, perfil ou políticas RLS)
-    const { data: utilRow, error: utilErr } = await adminSupabase
+    // 4. Localizar perfil super_admin em public.utilizadores por e-mail (bernardoariano@gmail.com) ou UUID preservado
+    const { data: utilByEmail, error: utilEmailErr } = await adminSupabase
       .from('utilizadores')
       .select('*')
-      .eq('id', TARGET_UUID)
+      .ilike('email', TARGET_EMAIL)
       .maybeSingle();
 
-    if (utilErr) {
+    let utilRow = utilByEmail;
+    if (!utilRow && !utilEmailErr) {
+      const { data: utilById } = await adminSupabase
+        .from('utilizadores')
+        .select('*')
+        .eq('id', TARGET_UUID)
+        .maybeSingle();
+      utilRow = utilById;
+    }
+
+    if (utilEmailErr) {
       return res.status(400).json({
         success: false,
-        error: `Erro ao verificar perfil em public.utilizadores: ${utilErr.message}`,
+        error: `Erro ao verificar perfil em public.utilizadores: ${utilEmailErr.message}`,
       });
     }
 
     if (!utilRow) {
       return res.status(404).json({
         success: false,
-        error: `Perfil em public.utilizadores não encontrado para UUID ${TARGET_UUID}.`,
+        error: `Perfil em public.utilizadores não encontrado para ${TARGET_EMAIL}.`,
       });
     }
 
-    const resolvedRole = String(utilRow.role ?? utilRow.perfil ?? '').trim().toLowerCase();
+    const resolvedRole = String(utilRow.role ?? utilRow.perfil ?? utilRow.tipo ?? '').trim().toLowerCase();
     if (resolvedRole !== 'super_admin' && resolvedRole !== 'superadmin') {
       return res.status(403).json({
         success: false,
@@ -181,8 +172,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    const resolvedTargetUid = String(utilRow.auth_user_id || utilRow.user_id || utilRow.id || TARGET_UUID);
+
+    // 5. Confirmar que a conta existe no Supabase Auth
+    const { data: existingAuth, error: getAuthErr } = await adminSupabase.auth.admin.getUserById(resolvedTargetUid);
+    if (getAuthErr || !existingAuth?.user) {
+      return res.status(404).json({
+        success: false,
+        error: `Conta Super Admin não encontrada no Supabase Auth para ${TARGET_EMAIL}: ${
+          getAuthErr?.message || 'Utilizador inexistente.'
+        }`,
+      });
+    }
+
     // 6. Atualizar exclusivamente a palavra-passe da conta existente via Auth Admin API
-    const { data: updatedAuth, error: updateErr } = await adminSupabase.auth.admin.updateUserById(TARGET_UUID, {
+    const { data: updatedAuth, error: updateErr } = await adminSupabase.auth.admin.updateUserById(resolvedTargetUid, {
       password: newPassword,
     });
 
@@ -193,10 +197,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    if (
-      updatedAuth.user.id !== TARGET_UUID ||
-      String(updatedAuth.user.email || '').trim().toLowerCase() !== TARGET_EMAIL
-    ) {
+    if (updatedAuth.user.id !== resolvedTargetUid) {
       return res.status(500).json({
         success: false,
         error: 'Resposta inesperada do Supabase Auth ao confirmar a conta atualizada.',

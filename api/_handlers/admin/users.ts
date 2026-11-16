@@ -440,7 +440,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const targetProfile = mapUtilizadorRow(existingRow);
 
-      // Proteger Super Administrador existente (bamidia@gmail.com / UUID 8b9f3c41-c996-4764-87c2-9d82411584e1)
+      // Proteger Super Administrador existente (bernardoariano@gmail.com / UUID 8b9f3c41-c996-4764-87c2-9d82411584e1)
       if (isProtectedSuperAdmin(targetProfile.id, targetProfile.email)) {
         return res.status(403).json({
           success: false,

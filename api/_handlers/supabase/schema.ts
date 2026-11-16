@@ -16,7 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const fallbackSql = `-- NEUROJUS / KwanzaCobro: Autenticação Supabase Auth + RLS Multiempresa
--- Preserva bamidia@gmail.com (8b9f3c41-c996-4764-87c2-9d82411584e1)
+-- Preserva bernardoariano@gmail.com (super_admin)
 -- e funções existentes: is_super_admin(), current_company_id(), is_company_admin()
 ALTER TABLE public.utilizadores ADD COLUMN IF NOT EXISTS auth_user_id UUID;
 ALTER TABLE public.utilizadores ADD COLUMN IF NOT EXISTS user_id UUID;

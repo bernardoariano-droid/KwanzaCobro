@@ -320,7 +320,7 @@ export const CompaniesManagementView: React.FC<CompaniesManagementViewProps> = (
   // Script SQL Completo (Criação + Relacionamentos FK + RLS Multiempresa)
   const MULTI_TENANT_SQL = `-- ====================================================================
 -- NEUROJUS / KwanzaCobro: Tabelas, Relacionamentos (FK) e RLS Multiempresa
--- Seguro e não-destrutivo: NÃO apaga dados, NÃO altera bamidia@gmail.com
+-- Seguro e não-destrutivo: NÃO apaga dados, NÃO altera bernardoariano@gmail.com
 -- e preserva is_super_admin(), current_company_id(), is_company_admin().
 -- ====================================================================
 
@@ -471,10 +471,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             <button
               onClick={() => setIsTempPasswordModalOpen(true)}
-              className="px-3.5 py-2.5 text-xs font-bold text-amber-950 bg-amber-100 hover:bg-amber-200 active:scale-95 rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer border border-amber-300"
+              className="px-3.5 py-2.5 text-xs font-bold text-emerald-950 bg-emerald-100 hover:bg-emerald-200 active:scale-95 rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer border border-emerald-300"
             >
-              <KeyRound className="w-4 h-4 text-amber-800" />
-              <span>Senha Super Admin (Temp)</span>
+              <KeyRound className="w-4 h-4 text-emerald-800" />
+              <span>Senha Definitiva Super Admin</span>
             </button>
 
             <button
@@ -1041,7 +1041,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
                           required
                           minLength={6}
                           autoComplete="new-password"
-                          placeholder="Mínimo 6 caracteres"
+                          placeholder="Números ou texto (mín. 6 caracteres)"
                           value={adminPassword}
                           onChange={e => setAdminPassword(e.target.value)}
                           className="w-full pl-8 pr-9 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
@@ -1055,6 +1055,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
                           {showAdminPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
                       </div>
+                      <span className="text-[10px] text-slate-500 mt-1 block">
+                        Pode usar apenas números ou apenas texto (mín. 6 caracteres).
+                      </span>
                     </div>
 
                     <div>

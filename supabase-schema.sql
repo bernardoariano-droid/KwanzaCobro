@@ -5,7 +5,7 @@
 --   • NÃO apaga tabelas, registos nem dados existentes.
 --   • NÃO cria coluna senha/password em public.utilizadores ou company_settings.
 --   • PRESERVA o Super Administrador existente:
---     Email: bamidia@gmail.com | UUID: 8b9f3c41-c996-4764-87c2-9d82411584e1
+--     Email: bernardoariano@gmail.com | UUID preservado: 8b9f3c41-c996-4764-87c2-9d82411584e1
 --   • PRESERVA as funções SQL existentes:
 --     public.is_super_admin(), public.current_company_id(), public.is_company_admin()
 -- ====================================================================
@@ -214,7 +214,7 @@ BEGIN
                 OR (auth.uid() IS NULL AND current_user IN ('postgres', 'supabase_admin'))
             );
         BEGIN
-            IF OLD.id::text = '8b9f3c41-c996-4764-87c2-9d82411584e1' AND NOT v_is_admin_ctx THEN
+            IF (OLD.id::text = '8b9f3c41-c996-4764-87c2-9d82411584e1' OR lower(COALESCE(OLD.email, '')) = 'bernardoariano@gmail.com') AND NOT v_is_admin_ctx THEN
                 IF (v_new->>'role') IS DISTINCT FROM (v_old->>'role')
                    OR (v_new->>'perfil') IS DISTINCT FROM (v_old->>'perfil')
                    OR (v_new->>'tipo') IS DISTINCT FROM (v_old->>'tipo')
@@ -518,7 +518,7 @@ CREATE INDEX IF NOT EXISTS idx_debt_items_debt_id ON public.debt_items(debt_id);
 
 -- --------------------------------------------------------------------
 -- 4. TRIGGER DE SEGURANÇA:
---    a) Protege o Super Administrador existente (bamidia@gmail.com / 8b9f3c41-c996-4764-87c2-9d82411584e1)
+--    a) Protege o Super Administrador existente (bernardoariano@gmail.com / 8b9f3c41-c996-4764-87c2-9d82411584e1)
 --    b) Impede qualquer utilizador de alterar o próprio perfil, permissões ou empresa
 -- --------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.prevent_self_privilege_change()
@@ -531,7 +531,7 @@ DECLARE
         OR (auth.uid() IS NULL AND current_user IN ('postgres', 'supabase_admin'))
     );
 BEGIN
-    IF OLD.id::text = '8b9f3c41-c996-4764-87c2-9d82411584e1' AND NOT v_is_admin_ctx THEN
+    IF (OLD.id::text = '8b9f3c41-c996-4764-87c2-9d82411584e1' OR lower(COALESCE(OLD.email, '')) = 'bernardoariano@gmail.com') AND NOT v_is_admin_ctx THEN
         IF (v_new->>'role') IS DISTINCT FROM (v_old->>'role')
            OR (v_new->>'perfil') IS DISTINCT FROM (v_old->>'perfil')
            OR (v_new->>'tipo') IS DISTINCT FROM (v_old->>'tipo')
@@ -925,7 +925,7 @@ FOR INSERT WITH CHECK (
 
 CREATE POLICY "utilizadores_update_policy" ON public.utilizadores
 FOR UPDATE USING (
-    ((public.is_super_admin() OR public.is_active_super_admin()) AND id::text <> '8b9f3c41-c996-4764-87c2-9d82411584e1')
+    ((public.is_super_admin() OR public.is_active_super_admin()) AND id::text <> '8b9f3c41-c996-4764-87c2-9d82411584e1' AND lower(COALESCE(email, '')) <> 'bernardoariano@gmail.com')
     OR (
         (public.is_company_admin() OR public.is_active_company_admin())
         AND company_id::text = COALESCE(public.current_company_id()::text, public.app_current_company_id())
@@ -937,6 +937,7 @@ CREATE POLICY "utilizadores_delete_policy" ON public.utilizadores
 FOR DELETE USING (
     (public.is_super_admin() OR public.is_active_super_admin())
     AND id::text <> '8b9f3c41-c996-4764-87c2-9d82411584e1'
+    AND lower(COALESCE(email, '')) <> 'bernardoariano@gmail.com'
 );
 
 ALTER TABLE public.company_settings ENABLE ROW LEVEL SECURITY;
@@ -1092,7 +1093,7 @@ BEGIN
     END IF;
 
     -- Proteger conta do Super Administrador principal
-    IF NEW.id::text = '8b9f3c41-c996-4764-87c2-9d82411584e1' OR lower(NEW.email) = 'bamidia@gmail.com' THEN
+    IF NEW.id::text = '8b9f3c41-c996-4764-87c2-9d82411584e1' OR lower(NEW.email) = 'bernardoariano@gmail.com' THEN
         RETURN NEW;
     END IF;
 
@@ -1207,7 +1208,7 @@ BEGIN
         RAISE EXCEPTION 'Conta Supabase Auth não encontrada.';
     END IF;
 
-    IF v_uid::text = '8b9f3c41-c996-4764-87c2-9d82411584e1' OR v_email = 'bamidia@gmail.com' THEN
+    IF v_uid::text = '8b9f3c41-c996-4764-87c2-9d82411584e1' OR v_email = 'bernardoariano@gmail.com' THEN
         RAISE EXCEPTION 'A conta do Super Administrador principal está protegida.';
     END IF;
 
@@ -1321,39 +1322,63 @@ BEGIN
     FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'utilizadores' AND column_name = 'company_id';
 
-    IF v_comp_id_type <> 'uuid' THEN
+    IF v_comp_id_type = 'uuid' THEN
+        SELECT id::uuid INTO v_default_comp_uuid FROM public.company_settings LIMIT 1;
+        IF v_default_comp_uuid IS NULL THEN
+            v_default_comp_uuid := gen_random_uuid();
+            INSERT INTO public.company_settings (id, name, email, city, currency, status, super_admin_id)
+            VALUES (v_default_comp_uuid, 'NEUROJUS / KwanzaCobro - Sede Principal', 'contacto@kwanzacobro.ao', 'Luanda, Angola', 'Kz', 'ativo', '8b9f3c41-c996-4764-87c2-9d82411584e1')
+            ON CONFLICT (id) DO NOTHING;
+        END IF;
+    ELSE
         INSERT INTO public.company_settings (id, name, email, city, currency, status, super_admin_id)
         SELECT 'default_company', 'NEUROJUS / KwanzaCobro - Sede Principal', 'contacto@kwanzacobro.ao', 'Luanda, Angola', 'Kz', 'ativo', '8b9f3c41-c996-4764-87c2-9d82411584e1'
         WHERE NOT EXISTS (SELECT 1 FROM public.company_settings WHERE id = 'default_company');
     END IF;
 
-    -- Garante perfil para o Super Administrador preservado (por UUID ou e-mail bamidia@gmail.com)
-    IF v_util_comp_type = 'uuid' THEN
-        SELECT id::uuid INTO v_default_comp_uuid FROM public.company_settings LIMIT 1;
-        INSERT INTO public.utilizadores (id, nome, email, role, perfil, tipo, company_id, ativo, estado, status, branch)
-        SELECT au.id,
-               COALESCE(NULLIF(au.raw_user_meta_data->>'name', ''), 'Super Administrador NEUROJUS'),
-               lower(au.email),
-               'super_admin', 'super_admin', 'super_admin',
-               v_default_comp_uuid,
-               TRUE, 'ativo', 'ativo', 'Sede Principal'
-        FROM auth.users au
-        WHERE (au.id = '8b9f3c41-c996-4764-87c2-9d82411584e1'::uuid OR lower(au.email) = 'bamidia@gmail.com')
-          AND NOT EXISTS (SELECT 1 FROM public.utilizadores u WHERE u.id = au.id OR lower(u.email) = lower(au.email))
-        ON CONFLICT DO NOTHING;
-    ELSE
-        INSERT INTO public.utilizadores (id, nome, email, role, perfil, tipo, company_id, ativo, estado, status, branch)
-        SELECT au.id,
-               COALESCE(NULLIF(au.raw_user_meta_data->>'name', ''), 'Super Administrador NEUROJUS'),
-               lower(au.email),
-               'super_admin', 'super_admin', 'super_admin',
-               'default_company',
-               TRUE, 'ativo', 'ativo', 'Sede Principal'
-        FROM auth.users au
-        WHERE (au.id = '8b9f3c41-c996-4764-87c2-9d82411584e1'::uuid OR lower(au.email) = 'bamidia@gmail.com')
-          AND NOT EXISTS (SELECT 1 FROM public.utilizadores u WHERE u.id = au.id OR lower(u.email) = lower(au.email))
-        ON CONFLICT DO NOTHING;
-    END IF;
+    -- Garante perfil ativo de super_admin para bernardoariano@gmail.com (ou UUID preservado)
+    BEGIN
+        IF v_util_comp_type = 'uuid' THEN
+            SELECT id::uuid INTO v_default_comp_uuid FROM public.company_settings LIMIT 1;
+            INSERT INTO public.utilizadores (id, nome, email, role, perfil, tipo, company_id, ativo, estado, status, branch)
+            SELECT au.id,
+                   COALESCE(NULLIF(au.raw_user_meta_data->>'name', ''), 'Super Administrador NEUROJUS'),
+                   lower(au.email),
+                   'super_admin', 'super_admin', 'super_admin',
+                   v_default_comp_uuid,
+                   TRUE, 'ativo', 'ativo', 'Sede Principal'
+            FROM auth.users au
+            WHERE (lower(au.email) = 'bernardoariano@gmail.com' OR au.id = '8b9f3c41-c996-4764-87c2-9d82411584e1'::uuid)
+              AND NOT EXISTS (SELECT 1 FROM public.utilizadores u WHERE u.id = au.id OR lower(u.email) = lower(au.email))
+            ON CONFLICT DO NOTHING;
+        ELSE
+            INSERT INTO public.utilizadores (id, nome, email, role, perfil, tipo, company_id, ativo, estado, status, branch)
+            SELECT au.id,
+                   COALESCE(NULLIF(au.raw_user_meta_data->>'name', ''), 'Super Administrador NEUROJUS'),
+                   lower(au.email),
+                   'super_admin', 'super_admin', 'super_admin',
+                   'default_company',
+                   TRUE, 'ativo', 'ativo', 'Sede Principal'
+            FROM auth.users au
+            WHERE (lower(au.email) = 'bernardoariano@gmail.com' OR au.id = '8b9f3c41-c996-4764-87c2-9d82411584e1'::uuid)
+              AND NOT EXISTS (SELECT 1 FROM public.utilizadores u WHERE u.id = au.id OR lower(u.email) = lower(au.email))
+            ON CONFLICT DO NOTHING;
+        END IF;
+    EXCEPTION WHEN insufficient_privilege THEN
+        RAISE NOTICE 'Selecione a role postgres no SQL Editor do Supabase para sincronizar automaticamente auth.users -> public.utilizadores.';
+    END;
+
+    -- Se bernardoariano@gmail.com já tiver linha em public.utilizadores, promove/ativa como super_admin
+    UPDATE public.utilizadores
+    SET role = 'super_admin',
+        perfil = 'super_admin',
+        tipo = 'super_admin',
+        ativo = TRUE,
+        active = TRUE,
+        is_active = TRUE,
+        estado = 'ativo',
+        status = 'ativo'
+    WHERE lower(COALESCE(email, '')) = 'bernardoariano@gmail.com';
 END $$;
 
 

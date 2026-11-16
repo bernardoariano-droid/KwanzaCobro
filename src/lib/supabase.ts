@@ -385,7 +385,13 @@ export function translateSupabaseErrorMessage(message?: string): string {
     return 'Este e-mail já está registado no Supabase Auth. Tente entrar em "Iniciar Sessão" ou recuperar a palavra-passe.';
   }
   if (msg.includes('password should be at least') || msg.includes('weak_password')) {
-    return 'A palavra-passe deve ter pelo menos 6 caracteres.';
+    return 'A palavra-passe deve ter pelo menos 6 caracteres (pode usar apenas números ou texto).';
+  }
+  if (msg.includes('same_password') || msg.includes('different from the old password')) {
+    return 'A nova palavra-passe deve ser diferente da palavra-passe atual.';
+  }
+  if (msg.includes('auth session missing') || msg.includes('session_not_found')) {
+    return 'Sessão de autenticação ausente ou expirada. Inicie sessão novamente antes de alterar a palavra-passe.';
   }
   if (msg.includes('signups not allowed')) {
     return 'O registo público está temporariamente desativado no projeto Supabase.';
@@ -732,16 +738,22 @@ export async function sendPasswordResetEmail(email: string): Promise<{ ok: boole
   return { ok: true };
 }
 
-export async function updateAuthenticatedPassword(newPassword: string): Promise<{ ok: boolean; error?: string }> {
+export async function updateAuthenticatedPassword(
+  newPassword: string
+): Promise<{ ok: boolean; email?: string; uuid?: string; error?: string }> {
   if (!newPassword || newPassword.length < 6) {
     return { ok: false, error: 'A nova palavra-passe deve ter pelo menos 6 caracteres.' };
   }
 
-  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  const { data, error } = await supabase.auth.updateUser({ password: newPassword });
   if (error) {
     return { ok: false, error: translateSupabaseAuthError(error.message) };
   }
-  return { ok: true };
+  return {
+    ok: true,
+    email: data?.user?.email || undefined,
+    uuid: data?.user?.id || undefined,
+  };
 }
 
 async function authorizedApiFetch(url: string, options: RequestInit = {}): Promise<Response> {

@@ -14,6 +14,8 @@ import {
   AlertCircle,
   ToggleLeft,
   ToggleRight,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import {
   Seller,
@@ -98,6 +100,7 @@ export const SellersView: React.FC<SellersViewProps> = ({
   const [branch, setBranch] = useState('Armazém Central Viana');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<UserRole>('vendedor');
   const [isActive, setIsActive] = useState(true);
   const [targetCompanyId, setTargetCompanyId] = useState(currentCompanyId);
@@ -191,11 +194,11 @@ export const SellersView: React.FC<SellersViewProps> = ({
       return;
     }
     if (!editingUser && password.trim().length < 6) {
-      setErrorMessage('Para novos utilizadores, a palavra-passe inicial deve ter no mínimo 6 caracteres.');
+      setErrorMessage('Para novos utilizadores, a palavra-passe inicial deve ter pelo menos 6 caracteres (pode usar apenas números ou texto).');
       return;
     }
     if (editingUser && password.trim().length > 0 && password.trim().length < 6) {
-      setErrorMessage('A nova palavra-passe deve ter pelo menos 6 caracteres.');
+      setErrorMessage('A nova palavra-passe deve ter pelo menos 6 caracteres (pode usar apenas números ou texto).');
       return;
     }
 
@@ -521,15 +524,30 @@ export const SellersView: React.FC<SellersViewProps> = ({
               <label className="block text-xs font-bold text-slate-700 mb-1">
                 {editingUser ? 'Nova Palavra-passe (opcional)' : 'Palavra-passe Inicial'} {!editingUser && <span className="text-rose-500">*</span>}
               </label>
-              <input
-                type="password"
-                required={!editingUser}
-                minLength={6}
-                placeholder={editingUser ? 'Deixe vazio para manter a atual' : 'Mínimo 6 caracteres'}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="w-full py-2 px-3 text-xs font-mono border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required={!editingUser}
+                  minLength={6}
+                  autoComplete="new-password"
+                  placeholder={editingUser ? 'Deixe vazio para manter a atual' : 'Números ou texto (ex: 123456)'}
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  className="w-full py-2 pl-3 pr-9 text-xs font-mono border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-700 cursor-pointer"
+                  tabIndex={-1}
+                  title={showPassword ? 'Ocultar palavra-passe' : 'Ver palavra-passe'}
+                >
+                  {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              <span className="text-[10px] text-slate-500 mt-1 block">
+                Aceita apenas números ou apenas texto (mín. 6 caracteres).
+              </span>
             </div>
 
             <div>

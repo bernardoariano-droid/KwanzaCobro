@@ -10,10 +10,6 @@ import {
   CheckCircle2,
   KeyRound,
   ArrowLeft,
-  UserPlus,
-  Building2,
-  Phone,
-  User,
   Database,
   Copy,
   Check,
@@ -22,7 +18,6 @@ import {
 import { AuthUser, CompanySettings } from '../types/debt';
 import {
   signInWithSupabaseAuth,
-  signUpWithSupabaseAuth,
   sendPasswordResetEmail,
   updateAuthenticatedPassword,
   testSupabaseConnection,
@@ -36,7 +31,7 @@ import { TempSuperAdminPasswordModal } from './TempSuperAdminPasswordModal';
 interface LoginPageProps {
   company: CompanySettings;
   onLoginSuccess: (user: AuthUser, matchedCompany?: CompanySettings) => void;
-  initialMode?: 'login' | 'register' | 'forgot' | 'reset';
+  initialMode?: 'login' | 'forgot' | 'reset';
   externalError?: string | null;
   onPasswordResetDone?: () => void;
 }
@@ -49,14 +44,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   onPasswordResetDone,
 }) => {
   const { t } = useLanguage();
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'reset'>(initialMode);
+  const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [companyName, setCompanyName] = useState('');
-  const [companyNif, setCompanyNif] = useState('');
-  const [phone, setPhone] = useState('+244 9');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(externalError);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -120,60 +111,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       onLoginSuccess(result.user, result.company);
     } catch (err: any) {
       setError(err?.message || 'Erro inesperado ao autenticar.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleRegisterSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccessMsg(null);
-
-    if (!fullName.trim()) {
-      setError('Informe o seu nome completo.');
-      return;
-    }
-    if (!companyName.trim()) {
-      setError('Informe o nome da empresa.');
-      return;
-    }
-    if (password.length < 6) {
-      setError('A palavra-passe deve ter pelo menos 6 caracteres.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError('As palavras-passe não coincidem.');
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const result = await signUpWithSupabaseAuth({
-        name: fullName,
-        email,
-        password,
-        phone,
-        companyName,
-        nif: companyNif,
-      });
-
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-
-      if (result.needsEmailConfirmation) {
-        setSuccessMsg(result.message);
-        setPassword('');
-        setConfirmPassword('');
-        setMode('login');
-        return;
-      }
-
-      onLoginSuccess(result.user, result.company);
-    } catch (err: any) {
-      setError(err?.message || 'Erro inesperado ao registar conta.');
     } finally {
       setIsLoading(false);
     }
@@ -274,45 +211,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 ? 'Recuperação de Palavra-Passe Segura'
                 : mode === 'reset'
                 ? 'Definir Nova Palavra-Passe de Acesso'
-                : mode === 'register'
-                ? 'Criar Conta Empresarial Isolada no Supabase Auth'
                 : 'Recuperação de Crédito, Comprovativos Oficiais e Avisos de Vencimento'}
             </p>
-
-            {(mode === 'login' || mode === 'register') && (
-              <div className="mt-4 inline-flex p-1 rounded-xl bg-emerald-100/70 border border-emerald-200">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setError(null);
-                    setSuccessMsg(null);
-                    setMode('login');
-                  }}
-                  className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                    mode === 'login'
-                      ? 'bg-emerald-700 text-white shadow-xs'
-                      : 'text-emerald-900 hover:bg-emerald-200/50'
-                  }`}
-                >
-                  Iniciar Sessão
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setError(null);
-                    setSuccessMsg(null);
-                    setMode('register');
-                  }}
-                  className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                    mode === 'register'
-                      ? 'bg-emerald-700 text-white shadow-xs'
-                      : 'text-emerald-900 hover:bg-emerald-200/50'
-                  }`}
-                >
-                  Registar Empresa
-                </button>
-              </div>
-            )}
           </div>
 
           {/* Aviso de Inicialização / Atualização das Tabelas no Supabase */}
@@ -463,176 +363,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             </form>
           )}
 
-          {/* MODO 1B: REGISTO DE NOVA EMPRESA */}
-          {mode === 'register' && (
-            <form onSubmit={handleRegisterSubmit} className="p-6 sm:p-8 space-y-4">
-              {error && (
-                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-2.5 text-xs text-rose-800">
-                  <div className="flex items-start gap-2.5">
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                    <span>{error}</span>
-                  </div>
-                  {(error.toLowerCase().includes('supabase-schema.sql') || error.toLowerCase().includes('sql editor')) && (
-                    <button
-                      type="button"
-                      onClick={handleOpenSqlModal}
-                      className="shrink-0 px-2.5 py-1 text-[11px] font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-lg cursor-pointer"
-                    >
-                      Ver SQL
-                    </button>
-                  )}
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Nome Completo <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                      <User className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Ex: Manuel Domingos"
-                      value={fullName}
-                      onChange={e => setFullName(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Nome da Empresa <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                      <Building2 className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Ex: Comercial Luanda Sul, Lda"
-                      value={companyName}
-                      onChange={e => setCompanyName(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    E-mail Corporativo / Acesso <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                      <Mail className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="email"
-                      required
-                      autoComplete="email"
-                      placeholder="seu.email@gmail.com"
-                      value={email}
-                      onChange={e => setEmail(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
-                    />
-                  </div>
-                  <p className="mt-1 text-[10px] text-slate-500 leading-tight">
-                    Utilize um e-mail real e ativo (ex: @gmail.com ou domínio válido da empresa). Domínios fictícios não são aceites.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Telefone / WhatsApp
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                      <Phone className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="+244 923 000 000"
-                      value={phone}
-                      onChange={e => setPhone(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2.5 text-sm font-mono bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    NIF da Empresa (Opcional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex: 5401928374"
-                    value={companyNif}
-                    onChange={e => setCompanyNif(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-sm font-mono bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Palavra-passe <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                      <Lock className="w-4 h-4" />
-                    </div>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      minLength={6}
-                      autoComplete="new-password"
-                      placeholder="Mínimo 6 caracteres"
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      className="w-full pl-10 pr-10 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="md:col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Confirmar Palavra-passe <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    autoComplete="new-password"
-                    placeholder="Repita a palavra-passe"
-                    value={confirmPassword}
-                    onChange={e => setConfirmPassword(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full py-3.5 px-6 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-98 rounded-xl shadow-md shadow-emerald-700/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70 min-h-[48px]"
-              >
-                <UserPlus className="w-4 h-4 text-emerald-200" />
-                <span>{isLoading ? 'A registar empresa e utilizador...' : 'Criar Conta Real & Iniciar Gestão'}</span>
-              </button>
-            </form>
-          )}
-
           {/* MODO 2: RECUPERAÇÃO DE PALAVRA-PASSE */}
           {mode === 'forgot' && (
             <form onSubmit={handleForgotSubmit} className="p-6 sm:p-8 space-y-5">
@@ -724,7 +454,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       type={showPassword ? 'text' : 'password'}
                       required
                       minLength={6}
-                      placeholder="Mínimo 6 caracteres"
+                      placeholder="Números ou texto (mín. 6 caracteres)"
                       value={password}
                       onChange={e => setPassword(e.target.value)}
                       className="w-full pl-10 pr-10 py-3 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 outline-none transition-all"
@@ -782,7 +512,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               onClick={() => setIsTempResetOpen(true)}
               className="font-semibold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
             >
-              Configuração Temporária · Super Admin
+              Definir Senha · Super Admin
             </button>
           </div>
         </div>

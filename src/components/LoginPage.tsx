@@ -14,6 +14,10 @@ import {
   Building2,
   Phone,
   User,
+  Database,
+  Copy,
+  Check,
+  RefreshCw,
 } from 'lucide-react';
 import { AuthUser, CompanySettings } from '../types/debt';
 import {
@@ -22,24 +26,16 @@ import {
   sendPasswordResetEmail,
   updateAuthenticatedPassword,
   testSupabaseConnection,
+  fetchSupabaseSchemaSql,
+  SupabaseHealthResult,
 } from '../lib/supabase';
-import {
-  AppAuthMode,
-  fetchLocalStatus,
-  getSavedAuthMode,
-  registerLocalCompanyAndAdmin,
-  setSavedAuthMode,
-  setupLocalSuperAdmin,
-  signInLocalhost,
-} from '../lib/localStore';
 import { useLanguage } from '../i18n/LanguageContext';
 import { LanguageSelector } from './LanguageSelector';
 import { TempSuperAdminPasswordModal } from './TempSuperAdminPasswordModal';
-import { PRESERVED_SUPER_ADMIN_EMAIL } from '../data/initialData';
 
 interface LoginPageProps {
   company: CompanySettings;
-  onLoginSuccess: (user: AuthUser, matchedCompany?: CompanySettings, mode?: AppAuthMode) => void;
+  onLoginSuccess: (user: AuthUser, matchedCompany?: CompanySettings) => void;
   initialMode?: 'login' | 'register' | 'forgot' | 'reset';
   externalError?: string | null;
   onPasswordResetDone?: () => void;
@@ -53,14 +49,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   onPasswordResetDone,
 }) => {
   const { t } = useLanguage();
-  const [authBackendMode, setAuthBackendMode] = useState<AppAuthMode>(
-    () => getSavedAuthMode() || 'localhost'
-  );
-  const [supabaseTablesReady, setSupabaseTablesReady] = useState<boolean | null>(null);
-  const [superAdminLocalReady, setSuperAdminLocalReady] = useState<boolean>(false);
-  const [showLocalSuperAdminSetup, setShowLocalSuperAdminSetup] = useState<boolean>(false);
-  const [localAdminPassword, setLocalAdminPassword] = useState<string>('');
-
   const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'reset'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -74,6 +62,40 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isTempResetOpen, setIsTempResetOpen] = useState(false);
+  const [supabaseHealth, setSupabaseHealth] = useState<SupabaseHealthResult | null>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [showSqlModal, setShowSqlModal] = useState(false);
+  const [schemaSql, setSchemaSql] = useState('');
+  const [isCopiedSql, setIsCopiedSql] = useState(false);
+
+  const checkSupabaseSchemaHealth = async () => {
+    setIsCheckingHealth(true);
+    try {
+      const health = await testSupabaseConnection();
+      setSupabaseHealth(health);
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  };
+
+  const handleOpenSqlModal = async () => {
+    setShowSqlModal(true);
+    const sql = await fetchSupabaseSchemaSql();
+    if (sql) {
+      setSchemaSql(sql);
+    }
+  };
+
+  const handleCopySql = () => {
+    if (!schemaSql) return;
+    navigator.clipboard.writeText(schemaSql);
+    setIsCopiedSql(true);
+    setTimeout(() => setIsCopiedSql(false), 2500);
+  };
+
+  useEffect(() => {
+    checkSupabaseSchemaHealth();
+  }, []);
 
   useEffect(() => {
     setMode(initialMode);
@@ -83,36 +105,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     if (externalError) setError(externalError);
   }, [externalError]);
 
-  useEffect(() => {
-    let mounted = true;
-    Promise.all([testSupabaseConnection(), fetchLocalStatus()]).then(([supa, local]) => {
-      if (!mounted) return;
-      const tablesOk = Boolean(supa?.tableExists);
-      setSupabaseTablesReady(tablesOk);
-      if (local) {
-        setSuperAdminLocalReady(Boolean(local.superAdminHasPassword));
-      }
-      if (!getSavedAuthMode()) {
-        const preferred: AppAuthMode = tablesOk ? 'supabase' : 'localhost';
-        setAuthBackendMode(preferred);
-        setSavedAuthMode(preferred);
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const handleSwitchBackendMode = (nextMode: AppAuthMode) => {
-    setAuthBackendMode(nextMode);
-    setSavedAuthMode(nextMode);
-    setError(null);
-    setSuccessMsg(null);
-    if (nextMode === 'localhost' && (mode === 'forgot' || mode === 'reset')) {
-      setMode('login');
-    }
-  };
-
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -120,50 +112,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     setIsLoading(true);
 
     try {
-      if (authBackendMode === 'localhost') {
-        const result = await signInLocalhost(email, password);
-        if (!result.ok) {
-          setError(result.error);
-          if (result.needsLocalPasswordSetup) {
-            setShowLocalSuperAdminSetup(true);
-          }
-          return;
-        }
-        onLoginSuccess(result.user, result.company, 'localhost');
-        return;
-      }
-
       const result = await signInWithSupabaseAuth(email, password);
       if (!result.ok) {
         setError(result.error);
         return;
       }
-      onLoginSuccess(result.user, result.company, 'supabase');
+      onLoginSuccess(result.user, result.company);
     } catch (err: any) {
       setError(err?.message || 'Erro inesperado ao autenticar.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleLocalSuperAdminSetupSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccessMsg(null);
-    if (localAdminPassword.length < 6) {
-      setError('A palavra-passe local do Super Admin deve ter pelo menos 6 caracteres.');
-      return;
-    }
-    setIsLoading(true);
-    try {
-      const result = await setupLocalSuperAdmin(localAdminPassword);
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      onLoginSuccess(result.user, result.company, 'localhost');
-    } catch (err: any) {
-      setError(err?.message || 'Erro ao configurar Super Admin no localhost.');
     } finally {
       setIsLoading(false);
     }
@@ -193,23 +149,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
     setIsLoading(true);
     try {
-      if (authBackendMode === 'localhost') {
-        const result = await registerLocalCompanyAndAdmin({
-          name: fullName,
-          email,
-          password,
-          phone,
-          companyName,
-          nif: companyNif,
-        });
-        if (!result.ok) {
-          setError(result.error);
-          return;
-        }
-        onLoginSuccess(result.user, result.company, 'localhost');
-        return;
-      }
-
       const result = await signUpWithSupabaseAuth({
         name: fullName,
         email,
@@ -232,7 +171,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         return;
       }
 
-      onLoginSuccess(result.user, result.company, 'supabase');
+      onLoginSuccess(result.user, result.company);
     } catch (err: any) {
       setError(err?.message || 'Erro inesperado ao registar conta.');
     } finally {
@@ -336,49 +275,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 : mode === 'reset'
                 ? 'Definir Nova Palavra-Passe de Acesso'
                 : mode === 'register'
-                ? authBackendMode === 'localhost'
-                  ? 'Criar Conta Empresarial Isolada na Base Localhost'
-                  : 'Criar Conta Empresarial Isolada no Supabase Auth'
+                ? 'Criar Conta Empresarial Isolada no Supabase Auth'
                 : 'Recuperação de Crédito, Comprovativos Oficiais e Avisos de Vencimento'}
             </p>
 
-            {/* Seletor de Ambiente: Localhost vs Supabase Cloud */}
-            {mode !== 'reset' && (
-              <div className="mt-4 flex flex-col items-center gap-2">
-                <div className="inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200">
-                  <button
-                    type="button"
-                    onClick={() => handleSwitchBackendMode('localhost')}
-                    className={`px-3 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
-                      authBackendMode === 'localhost'
-                        ? 'bg-slate-900 text-white shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Modo Localhost (Base Local)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSwitchBackendMode('supabase')}
-                    className={`px-3 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
-                      authBackendMode === 'supabase'
-                        ? 'bg-emerald-700 text-white shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Supabase Cloud
-                  </button>
-                </div>
-                {authBackendMode === 'localhost' && supabaseTablesReady === false && (
-                  <span className="text-[11px] text-amber-700 font-medium">
-                    Base local ativa enquanto as tabelas do Supabase ainda não foram criadas (migração disponível em Configurações).
-                  </span>
-                )}
-              </div>
-            )}
-
             {(mode === 'login' || mode === 'register') && (
-              <div className="mt-3 inline-flex p-1 rounded-xl bg-emerald-100/70 border border-emerald-200">
+              <div className="mt-4 inline-flex p-1 rounded-xl bg-emerald-100/70 border border-emerald-200">
                 <button
                   type="button"
                   onClick={() => {
@@ -413,13 +315,64 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             )}
           </div>
 
+          {/* Aviso de Inicialização / Atualização das Tabelas no Supabase */}
+          {supabaseHealth && supabaseHealth.connected && (supabaseHealth.tableExists === false || supabaseHealth.schemaUpdateRequired) && (
+            <div className="mx-6 sm:mx-8 mt-5 p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 space-y-2.5">
+              <div className="flex items-start gap-2.5">
+                <Database className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">
+                    {supabaseHealth.schemaUpdateRequired
+                      ? 'Atualização de coluna necessária no Supabase'
+                      : 'Base de dados Supabase por inicializar'}
+                  </p>
+                  <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                    {supabaseHealth.schemaUpdateRequired
+                      ? `${supabaseHealth.message} Clique abaixo para copiar o script atualizado (seguro, não apaga dados).`
+                      : `O projeto Supabase (${supabaseHealth.projectId}) está online, mas as tabelas (company_settings, utilizadores) ainda não foram criadas. Execute supabase-schema.sql no SQL Editor do Supabase antes de registar empresas.`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 pl-6">
+                <button
+                  type="button"
+                  onClick={handleOpenSqlModal}
+                  className="px-3 py-1.5 text-[11px] font-bold bg-amber-700 hover:bg-amber-800 text-white rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>Ver / Copiar SQL (supabase-schema.sql)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={checkSupabaseSchemaHealth}
+                  disabled={isCheckingHealth}
+                  className="px-3 py-1.5 text-[11px] font-bold bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isCheckingHealth ? 'animate-spin' : ''}`} />
+                  <span>{isCheckingHealth ? 'A verificar...' : 'Verificar Novamente'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* MODO 1: LOGIN PRINCIPAL */}
           {mode === 'login' && (
             <form onSubmit={handleLoginSubmit} className="p-6 sm:p-8 space-y-5">
               {error && (
-                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <span>{error}</span>
+                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-2.5 text-xs text-rose-800">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                  {(error.toLowerCase().includes('supabase-schema.sql') || error.toLowerCase().includes('sql editor')) && (
+                    <button
+                      type="button"
+                      onClick={handleOpenSqlModal}
+                      className="shrink-0 px-2.5 py-1 text-[11px] font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-lg cursor-pointer"
+                    >
+                      Ver SQL
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -430,9 +383,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
               )}
 
-              {/* Caixas de E-mail e Senha: Horizontal no Computador (md:grid-cols-2) e Vertical no Telemóvel (grid-cols-1) */}
+              {/* Caixas de E-mail e Senha */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Campo E-mail */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
                     {t('login.ident_label', 'E-mail Corporativo')}
@@ -453,7 +405,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   </div>
                 </div>
 
-                {/* Campo Palavra-passe */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
                     {t('login.pass_label', 'Palavra-passe')}
@@ -483,33 +434,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-between gap-2">
-                {authBackendMode === 'localhost' ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowLocalSuperAdminSetup(prev => !prev)}
-                    className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
-                  >
-                    {superAdminLocalReady
-                      ? 'Redefinir acesso Super Admin Localhost'
-                      : `Configurar Super Admin Localhost (${PRESERVED_SUPER_ADMIN_EMAIL})`}
-                  </button>
-                ) : (
-                  <span />
-                )}
-                {authBackendMode === 'supabase' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setError(null);
-                      setSuccessMsg(null);
-                      setMode('forgot');
-                    }}
-                    className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
-                  >
-                    Esqueceu a palavra-passe?
-                  </button>
-                )}
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setSuccessMsg(null);
+                    setMode('forgot');
+                  }}
+                  className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
+                >
+                  Esqueceu a palavra-passe?
+                </button>
               </div>
 
               <button
@@ -520,45 +456,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <span>
                   {isLoading
                     ? t('login.authenticating', 'A autenticar...')
-                    : authBackendMode === 'localhost'
-                    ? 'Entrar no Sistema (Localhost)'
                     : t('login.submit', 'Entrar no Sistema')}
                 </span>
                 <ArrowRight className="w-4 h-4 text-emerald-200" />
               </button>
-
-              {authBackendMode === 'localhost' && (showLocalSuperAdminSetup || !superAdminLocalReady) && (
-                <div className="mt-4 p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-bold text-emerald-950">
-                        Acesso Super Administrador no Localhost
-                      </p>
-                      <p className="text-[11px] text-emerald-800 mt-0.5">
-                        Conta preservada: <strong>{PRESERVED_SUPER_ADMIN_EMAIL}</strong>. Defina uma palavra-passe local para entrar e gerir empresas, utilizadores, clientes e dívidas offline.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="password"
-                      minLength={6}
-                      placeholder="Nova palavra-passe local (mín. 6 caracteres)"
-                      value={localAdminPassword}
-                      onChange={e => setLocalAdminPassword(e.target.value)}
-                      className="flex-1 px-3.5 py-2.5 text-xs bg-white border border-emerald-300 rounded-xl focus:ring-2 focus:ring-emerald-600 outline-none"
-                    />
-                    <button
-                      type="button"
-                      disabled={isLoading}
-                      onClick={handleLocalSuperAdminSetupSubmit}
-                      className="px-4 py-2.5 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
-                    >
-                      Guardar & Entrar como Super Admin
-                    </button>
-                  </div>
-                </div>
-              )}
             </form>
           )}
 
@@ -566,9 +467,20 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           {mode === 'register' && (
             <form onSubmit={handleRegisterSubmit} className="p-6 sm:p-8 space-y-4">
               {error && (
-                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <span>{error}</span>
+                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-2.5 text-xs text-rose-800">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                  {(error.toLowerCase().includes('supabase-schema.sql') || error.toLowerCase().includes('sql editor')) && (
+                    <button
+                      type="button"
+                      onClick={handleOpenSqlModal}
+                      className="shrink-0 px-2.5 py-1 text-[11px] font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-lg cursor-pointer"
+                    >
+                      Ver SQL
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -613,7 +525,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    E-mail Corporativo <span className="text-rose-500">*</span>
+                    E-mail Corporativo / Acesso <span className="text-rose-500">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -623,12 +535,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       type="email"
                       required
                       autoComplete="email"
-                      placeholder="admin@empresa.ao"
+                      placeholder="seu.email@gmail.com"
                       value={email}
                       onChange={e => setEmail(e.target.value)}
                       className="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
                     />
                   </div>
+                  <p className="mt-1 text-[10px] text-slate-500 leading-tight">
+                    Utilize um e-mail real e ativo (ex: @gmail.com ou domínio válido da empresa). Domínios fictícios não são aceites.
+                  </p>
                 </div>
 
                 <div>
@@ -713,7 +628,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 className="w-full py-3.5 px-6 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-98 rounded-xl shadow-md shadow-emerald-700/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70 min-h-[48px]"
               >
                 <UserPlus className="w-4 h-4 text-emerald-200" />
-                <span>{isLoading ? 'A registar empresa e utilizador...' : 'Criar Conta & Iniciar Gestão'}</span>
+                <span>{isLoading ? 'A registar empresa e utilizador...' : 'Criar Conta Real & Iniciar Gestão'}</span>
               </button>
             </form>
           )}
@@ -860,21 +775,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <div className="px-6 sm:px-8 py-4 border-t border-slate-100 bg-slate-50/80 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>
-                {authBackendMode === 'localhost'
-                  ? 'Modo Localhost (Ficheiro JSON Seguro) · Pronto para Migração Supabase'
-                  : 'Supabase Auth · Controlo de Perfis & Isolamento Multiempresa'}
-              </span>
+              <span>Supabase Auth · Controlo de Perfis & Isolamento Multiempresa</span>
             </div>
-            {authBackendMode === 'supabase' && (
-              <button
-                type="button"
-                onClick={() => setIsTempResetOpen(true)}
-                className="font-semibold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
-              >
-                Configuração Temporária · Super Admin
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setIsTempResetOpen(true)}
+              className="font-semibold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
+            >
+              Configuração Temporária · Super Admin
+            </button>
           </div>
         </div>
 
@@ -889,6 +798,73 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         onClose={() => setIsTempResetOpen(false)}
         isSuperAdminAuthenticated={false}
       />
+
+      {showSqlModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-emerald-100 shadow-2xl w-full max-w-3xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="p-5 sm:p-6 bg-gradient-to-r from-emerald-900 to-slate-900 text-white flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base sm:text-lg font-bold flex items-center gap-2">
+                  <Database className="w-5 h-5 text-emerald-300" />
+                  <span>Inicializar Base de Dados no Supabase (supabase-schema.sql)</span>
+                </h2>
+                <p className="text-xs text-emerald-200 mt-0.5">
+                  1. Copie este script SQL · 2. Cole no SQL Editor do Supabase e clique em Run · 3. Clique em Verificar Novamente.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSqlModal(false)}
+                className="p-2 text-emerald-200 hover:text-white rounded-xl hover:bg-white/10 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 overflow-y-auto space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-slate-600">
+                  Projeto Supabase: <strong className="font-mono text-slate-900">{supabaseHealth?.projectId || 'ckcwpcnsfennfjmjwoqp'}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopySql}
+                  disabled={!schemaSql}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {isCopiedSql ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <span>{isCopiedSql ? 'SQL Copiado!' : 'Copiar Script SQL Completo'}</span>
+                </button>
+              </div>
+
+              <pre className="p-4 bg-slate-900 text-emerald-300 rounded-2xl text-[11px] font-mono overflow-x-auto leading-relaxed border border-slate-800 max-h-[50vh]">
+                {schemaSql || 'A carregar script supabase-schema.sql...'}
+              </pre>
+            </div>
+
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  await checkSupabaseSchemaHealth();
+                  setShowSqlModal(false);
+                }}
+                className="px-4 py-2 text-xs font-bold text-emerald-900 bg-emerald-100 hover:bg-emerald-200 rounded-xl transition-colors cursor-pointer inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isCheckingHealth ? 'animate-spin' : ''}`} />
+                <span>Já executei no Supabase · Verificar Novamente</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSqlModal(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

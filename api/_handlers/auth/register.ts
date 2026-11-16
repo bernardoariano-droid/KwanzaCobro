@@ -18,6 +18,21 @@ import {
  *   - Nunca armazena palavra-passe em texto simples em tabelas públicas.
  *   - Contas criadas por auto-registo iniciam como admin_geral da sua nova empresa isolada.
  */
+function isMissingSchemaError(err: any): boolean {
+  const code = String(err?.code || '').toUpperCase();
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    code === 'PGRST205' ||
+    code === 'PGRST202' ||
+    code === '42P01' ||
+    code === '42883' ||
+    msg.includes('schema cache') ||
+    msg.includes('could not find the table') ||
+    msg.includes('could not find the function') ||
+    msg.includes('does not exist')
+  );
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Método não permitido. Utilize POST.' });
@@ -66,10 +81,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (token) {
       // Caso A: O frontend já efetuou supabase.auth.signUp() e enviou o JWT da sessão criada
-      const anonClient = getAnonSupabase(token);
+      const anonClient = getAnonSupabase();
       const { data: userRes, error: userErr } = await anonClient.auth.getUser(token);
       if (userErr || !userRes?.user) {
-        return res.status(401).json({ success: false, error: 'Token de registo inválido ou expirado.' });
+        const rawErr = String(userErr?.message || '');
+        const lower = rawErr.toLowerCase();
+        const detail =
+          lower.includes('session') || lower.includes('expired')
+            ? 'A sessão de registo expirou ou foi encerrada antes de concluir. Se a sua conta já foi criada, tente entrar em "Iniciar Sessão" com o mesmo e-mail e palavra-passe.'
+            : `Token de registo inválido ou expirado (${rawErr || 'verificação JWT falhou'}). Tente novamente.`;
+        return res.status(401).json({ success: false, error: detail });
       }
       targetUserId = userRes.user.id;
       authUserObj = userRes.user;
@@ -87,14 +108,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           name: cleanName,
           phone: cleanPhone,
           company_name: cleanCompanyName,
+          nif: cleanNif,
+          branch: cleanBranch,
           role: 'admin_geral',
           self_register: true,
         },
       });
       if (createErr || !created?.user) {
+        const rawMsg = String(createErr?.message || '');
+        const lower = rawMsg.toLowerCase();
+        if (lower.includes('email_address_invalid') || (lower.includes('email address') && lower.includes('invalid'))) {
+          return res.status(400).json({
+            success: false,
+            error:
+              'O endereço de e-mail não foi aceite pelo Supabase Auth. Utilize um e-mail real com domínio válido (ex: @gmail.com, @outlook.com) sem espaços ou acentos.',
+          });
+        }
         return res.status(400).json({
           success: false,
-          error: createErr?.message || 'Não foi possível criar a conta no Supabase Auth.',
+          error: rawMsg || 'Não foi possível criar a conta no Supabase Auth.',
         });
       }
       targetUserId = created.user.id;
@@ -102,6 +134,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else {
       return res.status(400).json({
         success: false,
+        code: 'SERVICE_ROLE_UNAVAILABLE',
         error: 'Sessão de registo não fornecida e SUPABASE_SERVICE_ROLE_KEY não configurada no servidor.',
       });
     }
@@ -111,37 +144,113 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (!hasServiceRole) {
-      // Sem service_role no servidor, depende do trigger PostgreSQL handle_new_auth_user()
-      // Tentar consultar o perfil criado pelo trigger usando o JWT do próprio utilizador
+      // Sem service_role no servidor:
+      // 1. Verificar se o perfil já foi criado pelo trigger PostgreSQL handle_new_auth_user()
       const userClient = getAnonSupabase(token!);
-      const { data: existingProfile } = await userClient
+      const { data: existingProfile, error: existingErr } = await userClient
         .from('utilizadores')
         .select('*')
         .eq('id', targetUserId)
         .maybeSingle();
 
-      if (existingProfile) {
-        return res.status(200).json({
-          success: true,
-          user: mapUtilizadorRow(existingProfile, authUserObj),
+      if (existingErr && isMissingSchemaError(existingErr)) {
+        return res.status(400).json({
+          success: false,
+          code: 'SCHEMA_MISSING',
+          error:
+            'As tabelas da base de dados ainda não foram criadas no Supabase (public.utilizadores / public.company_settings). Execute o script supabase-schema.sql no SQL Editor do Supabase.',
         });
       }
 
-      return res.status(202).json({
-        success: true,
-        pendingProfileSync: true,
-        message: 'Conta criada no Supabase Auth. Execute supabase-schema.sql para concluir o provisionamento automático.',
+      if (existingProfile) {
+        const mapped = mapUtilizadorRow(existingProfile, authUserObj);
+        let companyData: any = undefined;
+        if (mapped.companyId) {
+          const { data: cRow } = await userClient
+            .from('company_settings')
+            .select('*')
+            .eq('id', mapped.companyId)
+            .maybeSingle();
+          if (cRow) companyData = cRow;
+        }
+        return res.status(200).json({
+          success: true,
+          user: mapped,
+          company: companyData,
+        });
+      }
+
+      // 2. Chamar a RPC SECURITY DEFINER complete_company_registration() com o JWT real do utilizador
+      const { data: rpcData, error: rpcErr } = await userClient.rpc('complete_company_registration', {
+        p_name: cleanName,
+        p_phone: cleanPhone,
+        p_company_name: cleanCompanyName,
+        p_nif: cleanNif,
+        p_branch: cleanBranch,
+      });
+
+      if (rpcErr) {
+        if (isMissingSchemaError(rpcErr)) {
+          return res.status(400).json({
+            success: false,
+            code: 'SCHEMA_MISSING',
+            error:
+              'Base de dados Supabase incompleta. Copie e execute o script supabase-schema.sql no SQL Editor do Supabase e tente novamente.',
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          error: `Erro ao registar empresa no Supabase: ${rpcErr.message}`,
+        });
+      }
+
+      if (rpcData && (rpcData as any).user) {
+        return res.status(201).json({
+          success: true,
+          user: mapUtilizadorRow((rpcData as any).user, authUserObj),
+          company: (rpcData as any).company || undefined,
+        });
+      }
+
+      // 3. Reconsultar utilizadores após RPC
+      const { data: postRpcProfile } = await userClient
+        .from('utilizadores')
+        .select('*')
+        .eq('id', targetUserId)
+        .maybeSingle();
+
+      if (postRpcProfile) {
+        return res.status(201).json({
+          success: true,
+          user: mapUtilizadorRow(postRpcProfile, authUserObj),
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        code: 'SCHEMA_MISSING',
+        error:
+          'Conta autenticada, mas não foi possível provisionar a empresa em public.company_settings. Execute supabase-schema.sql no SQL Editor do Supabase.',
       });
     }
 
     const adminSupabase = getAdminSupabase();
 
     // Verificar se o utilizador já possui perfil em public.utilizadores (por trigger ou chamada anterior)
-    const { data: existingUtil } = await adminSupabase
+    const { data: existingUtil, error: existingUtilErr } = await adminSupabase
       .from('utilizadores')
       .select('*')
       .eq('id', targetUserId)
       .maybeSingle();
+
+    if (existingUtilErr && isMissingSchemaError(existingUtilErr)) {
+      return res.status(400).json({
+        success: false,
+        code: 'SCHEMA_MISSING',
+        error:
+          'As tabelas da base de dados ainda não foram criadas no Supabase. Execute o script supabase-schema.sql no SQL Editor do Supabase.',
+      });
+    }
 
     if (existingUtil) {
       const mappedProfile = mapUtilizadorRow(existingUtil, authUserObj);
@@ -186,7 +295,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (compErr) {
       return res.status(400).json({
         success: false,
-        error: `Erro ao criar empresa: ${compErr.message}`,
+        code: isMissingSchemaError(compErr) ? 'SCHEMA_MISSING' : undefined,
+        error: isMissingSchemaError(compErr)
+          ? 'Tabela public.company_settings não encontrada no Supabase. Execute supabase-schema.sql no SQL Editor.'
+          : `Erro ao criar empresa: ${compErr.message}`,
       });
     }
 

@@ -21,25 +21,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const latencyMs = Date.now() - start;
     const isOnline = pingRes.ok || pingRes.status === 200 || pingRes.status === 401;
 
-    // 2. Query table counts (distinguish schema missing vs empty tables)
+    // 2. Query table counts (distinguish schema/table missing vs missing column 42703 vs empty tables)
     let tableExists = false;
+    let schemaErrorDetail: string | null = null;
     let counts = { companies: 0, sellers: 0, clients: 0, debts: 0 };
     try {
-      const [compRes, selRes, cliRes, debtRes] = await Promise.all([
+      const [compRes, utilRes, selRes, cliRes, debtRes] = await Promise.all([
         supabase.from('company_settings').select('id', { count: 'exact' }).limit(1),
+        supabase.from('utilizadores').select('id', { count: 'exact' }).limit(1),
         supabase.from('sellers').select('id', { count: 'exact' }).limit(1),
         supabase.from('clients').select('id', { count: 'exact' }).limit(1),
         supabase.from('debts').select('id', { count: 'exact' }).limit(1),
       ]);
 
-      const isMissingTableErr = (err: any) =>
-        Boolean(err?.code === 'PGRST205' || (err?.message && (err.message.includes('schema cache') || err.message.includes('does not exist'))));
+      const isMissingTableErr = (err: any) => {
+        if (!err) return false;
+        const code = String(err.code || '').toUpperCase();
+        const msg = String(err.message || '').toLowerCase();
+        return (
+          code === 'PGRST205' ||
+          code === '42P01' ||
+          msg.includes('schema cache') ||
+          msg.includes('could not find the table') ||
+          /relation\s+["']?[^"']+["']?\s+does not exist/i.test(msg)
+        );
+      };
+
+      const isSchemaOrFunctionErr = (err: any) => {
+        if (!err || isMissingTableErr(err)) return false;
+        const code = String(err.code || '').toUpperCase();
+        const msg = String(err.message || '').toLowerCase();
+        return (
+          code === '42703' ||
+          code === '42P13' ||
+          code === '42883' ||
+          code === '42804' ||
+          /column\s+.+\s+does not exist/i.test(msg) ||
+          msg.includes('return type mismatch') ||
+          msg.includes('does not exist') ||
+          msg.includes('operator does not exist')
+        );
+      };
+
+      const schemaErr = [compRes.error, utilRes.error, selRes.error, cliRes.error, debtRes.error].find(isSchemaOrFunctionErr);
+      if (schemaErr) {
+        schemaErrorDetail = String(schemaErr.message || 'Estrutura ou função SQL desatualizada.');
+      }
 
       tableExists =
-        (!compRes.error && !isMissingTableErr(compRes.error)) ||
-        (!selRes.error && !isMissingTableErr(selRes.error)) ||
-        (!cliRes.error && !isMissingTableErr(cliRes.error)) ||
-        (!debtRes.error && !isMissingTableErr(debtRes.error));
+        !isMissingTableErr(compRes.error) ||
+        !isMissingTableErr(utilRes.error) ||
+        !isMissingTableErr(selRes.error) ||
+        !isMissingTableErr(cliRes.error) ||
+        !isMissingTableErr(debtRes.error);
 
       counts = {
         companies: compRes.count ?? 0,
@@ -58,12 +92,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       projectId: SUPABASE_PROJECT_REF,
       url: SUPABASE_URL,
       tableExists,
+      schemaUpdateRequired: Boolean(schemaErrorDetail),
       counts,
       status: isOnline ? 'online' : 'offline',
       message: isOnline
-        ? tableExists
-          ? `Conectado ao Supabase (${counts.companies} empresas, ${counts.sellers} vendedores, ${counts.clients} clientes, ${counts.debts} dívidas)`
-          : 'Supabase Auth conectado. Execute supabase-schema.sql no SQL Editor para criar as tabelas.'
+        ? !tableExists
+          ? 'Supabase Auth conectado. Execute supabase-schema.sql no SQL Editor para criar as tabelas.'
+          : schemaErrorDetail
+          ? `Tabelas detetadas, mas falta atualizar a estrutura (${schemaErrorDetail}). Execute o script supabase-schema.sql atualizado no SQL Editor.`
+          : `Conectado ao Supabase (${counts.companies} empresas, ${counts.sellers} vendedores, ${counts.clients} clientes, ${counts.debts} dívidas)`
         : 'Cluster Supabase offline ou inatingível',
     });
   } catch (err: any) {

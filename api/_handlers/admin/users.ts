@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   authenticateRequest,
   getAdminSupabase,
+  getAnonSupabase,
   mapUtilizadorRow,
   normalizeServerRole,
   PRESERVED_SUPER_ADMIN_EMAIL,
@@ -15,6 +16,32 @@ function isProtectedSuperAdmin(userId?: string | null, email?: string | null): b
     cleanId === PRESERVED_SUPER_ADMIN_UUID.toLowerCase() ||
     cleanEmail === PRESERVED_SUPER_ADMIN_EMAIL.toLowerCase()
   );
+}
+
+function translateAuthCreationError(message?: string): string {
+  const msg = String(message || '').toLowerCase();
+  if (msg.includes('already registered') || msg.includes('already been registered') || msg.includes('already exists')) {
+    return 'Já existe uma conta no Supabase Auth registada com este endereço de e-mail.';
+  }
+  if (msg.includes('email_address_invalid') || (msg.includes('email address') && msg.includes('invalid'))) {
+    return 'O endereço de e-mail não foi aceite pelo Supabase Auth. Utilize um e-mail com domínio real e válido (ex: @gmail.com, @outlook.com) sem espaços ou acentos.';
+  }
+  if (msg.includes('database error saving new user')) {
+    return 'Erro interno no trigger de utilizadores do Supabase. Execute o script supabase-schema.sql atualizado no SQL Editor do Supabase.';
+  }
+  if (msg.includes('error sending confirmation email') || msg.includes('over_email_send_rate_limit') || msg.includes('email rate limit')) {
+    return 'O Supabase Auth atingiu o limite de envio de e-mails de confirmação. Configure SUPABASE_SERVICE_ROLE_KEY no servidor ou desative "Confirm email" em Authentication -> Providers -> Email no painel Supabase.';
+  }
+  if (msg.includes('password') && msg.includes('least')) {
+    return 'A palavra-passe deve ter pelo menos 6 caracteres.';
+  }
+  if (msg.includes('signups not allowed')) {
+    return 'O registo de novos utilizadores está desativado nas definições Auth do Supabase (ou configure SUPABASE_SERVICE_ROLE_KEY no servidor).';
+  }
+  if (msg.includes('rate limit') || msg.includes('too many requests')) {
+    return 'Limite temporário de pedidos no Supabase Auth atingido. Aguarde alguns instantes e tente novamente.';
+  }
+  return message || 'Erro ao criar conta no Supabase Auth.';
 }
 
 /**
@@ -31,6 +58,7 @@ function buildAdaptiveUtilizadorPayload(
     companyId: string | null;
     isActive: boolean;
     branch?: string;
+    sellerId?: string;
   },
   isInsert: boolean
 ): Record<string, any> {
@@ -47,24 +75,32 @@ function buildAdaptiveUtilizadorPayload(
   if (has('email')) payload.email = input.email;
 
   if (sampleColumns.has('nome')) payload.nome = input.name;
-  else if (has('name')) payload.name = input.name;
+  if (sampleColumns.has('name') || (!sampleColumns.has('nome') && has('name'))) payload.name = input.name;
 
   if (sampleColumns.has('telefone')) payload.telefone = input.phone || '';
-  else if (has('phone')) payload.phone = input.phone || '';
+  if (sampleColumns.has('phone') || (!sampleColumns.has('telefone') && has('phone'))) payload.phone = input.phone || '';
 
+  if (has('role')) payload.role = input.role;
   if (sampleColumns.has('perfil')) payload.perfil = input.role;
-  else if (has('role')) payload.role = input.role;
+  if (sampleColumns.has('tipo')) payload.tipo = input.role;
 
   if (has('company_id')) payload.company_id = input.companyId;
+  if (sampleColumns.has('empresa_id')) payload.empresa_id = input.companyId;
 
-  if (sampleColumns.has('ativo')) payload.ativo = input.isActive;
-  else if (sampleColumns.has('active')) payload.active = input.isActive;
-  else if (sampleColumns.has('is_active')) payload.is_active = input.isActive;
-  else if (sampleColumns.has('status')) payload.status = input.isActive ? 'ativo' : 'inativo';
+  if (sampleColumns.has('ativo') || has('ativo')) payload.ativo = input.isActive;
+  if (sampleColumns.has('active')) payload.active = input.isActive;
+  if (sampleColumns.has('is_active')) payload.is_active = input.isActive;
+  if (sampleColumns.has('estado')) payload.estado = input.isActive ? 'ativo' : 'inativo';
+  if (sampleColumns.has('status')) payload.status = input.isActive ? 'ativo' : 'inativo';
 
   if (input.branch !== undefined) {
-    if (sampleColumns.has('branch')) payload.branch = input.branch;
-    else if (sampleColumns.has('filial')) payload.filial = input.branch;
+    if (sampleColumns.has('branch') || has('branch')) payload.branch = input.branch;
+    if (sampleColumns.has('filial')) payload.filial = input.branch;
+  }
+
+  if (input.sellerId && (sampleColumns.size === 0 || sampleColumns.has('seller_id'))) {
+    payload.seller_id = input.sellerId;
+    if (sampleColumns.has('vendedor_id')) payload.vendedor_id = input.sellerId;
   }
 
   if (sampleColumns.has('updated_at')) {
@@ -74,20 +110,20 @@ function buildAdaptiveUtilizadorPayload(
   return payload;
 }
 
-async function detectUtilizadoresColumns(adminSupabase: any): Promise<Set<string>> {
+async function detectUtilizadoresColumns(supabaseClient: any): Promise<Set<string>> {
   try {
-    const { data } = await adminSupabase.from('utilizadores').select('*').limit(1);
+    const { data } = await supabaseClient.from('utilizadores').select('*').limit(1);
     if (Array.isArray(data) && data.length > 0) {
       return new Set(Object.keys(data[0]));
     }
   } catch {
     // fallback para conjunto padrão
   }
-  return new Set(['id', 'email', 'nome', 'name', 'telefone', 'phone', 'role', 'company_id', 'ativo']);
+  return new Set(['id', 'email', 'nome', 'name', 'telefone', 'phone', 'role', 'company_id', 'ativo', 'estado', 'branch', 'seller_id']);
 }
 
 async function insertOrUpdateUtilizadorWithFallback(
-  adminSupabase: any,
+  supabaseClient: any,
   mode: 'insert' | 'update',
   targetId: string,
   payload: Record<string, any>
@@ -96,8 +132,8 @@ async function insertOrUpdateUtilizadorWithFallback(
   for (let attempt = 0; attempt < 8; attempt++) {
     const query =
       mode === 'insert'
-        ? adminSupabase.from('utilizadores').insert(working).select('*').maybeSingle()
-        : adminSupabase.from('utilizadores').update(working).eq('id', targetId).select('*').maybeSingle();
+        ? supabaseClient.from('utilizadores').upsert(working, { onConflict: 'id' }).select('*').maybeSingle()
+        : supabaseClient.from('utilizadores').update(working).eq('id', targetId).select('*').maybeSingle();
 
     const { data, error } = await query;
     if (!error) return { data, error: null };
@@ -136,7 +172,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(auth.status).json({ success: false, error: auth.error });
   }
 
-  const { profile: caller } = auth;
+  const { profile: caller, userSupabase } = auth;
 
   // Apenas super_admin e admin_geral podem aceder à gestão de utilizadores
   if (caller.role !== 'super_admin' && caller.role !== 'admin_geral') {
@@ -146,16 +182,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  let adminSupabase;
-  try {
-    adminSupabase = getAdminSupabase();
-  } catch (envErr: any) {
-    return res.status(500).json({
-      success: false,
-      error: envErr.message,
-      missingServiceRoleKey: true,
-    });
-  }
+  const hasServiceRole = Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
+  const dbClient = hasServiceRole ? getAdminSupabase() : userSupabase;
 
   // -------------------------------------------------------
   // GET /api/admin/users - Listar utilizadores autorizados
@@ -163,7 +191,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') {
     try {
       const requestedCompanyId = req.query?.companyId ? String(req.query.companyId) : null;
-      let query = adminSupabase.from('utilizadores').select('*').order('created_at', { ascending: false });
+      let query = dbClient.from('utilizadores').select('*').order('created_at', { ascending: false });
 
       if (caller.role === 'admin_geral') {
         if (!caller.companyId) {
@@ -191,7 +219,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // -------------------------------------------------------
-  // POST /api/admin/users - Criar utilizador em Auth + public.utilizadores
+  // POST /api/admin/users - Criar utilizador real no Supabase Auth + public.utilizadores
   // -------------------------------------------------------
   if (req.method === 'POST') {
     try {
@@ -247,27 +275,74 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ success: false, error: 'É obrigatório associar o utilizador a uma empresa.' });
       }
 
-      // 1. Criar conta real no Supabase Auth
-      const { data: createdAuth, error: authCreateErr } = await adminSupabase.auth.admin.createUser({
-        email: cleanEmail,
-        password: cleanPass,
-        email_confirm: true,
-        user_metadata: {
-          name: cleanName,
-          role: requestedRole,
-          company_id: resolvedCompanyId,
-        },
-      });
+      let createdAuthUser: any = null;
+      let needsEmailConfirmation = false;
 
-      if (authCreateErr || !createdAuth?.user) {
-        return res.status(400).json({
-          success: false,
-          error: authCreateErr?.message || 'Erro ao criar conta no Supabase Auth.',
+      if (hasServiceRole) {
+        const adminSupabase = getAdminSupabase();
+        const { data: createdAuth, error: authCreateErr } = await adminSupabase.auth.admin.createUser({
+          email: cleanEmail,
+          password: cleanPass,
+          email_confirm: true,
+          user_metadata: {
+            name: cleanName,
+            phone: cleanPhone,
+            branch: cleanBranch,
+            role: requestedRole,
+            company_id: resolvedCompanyId,
+            admin_created: true,
+          },
         });
+
+        if (authCreateErr || !createdAuth?.user) {
+          return res.status(400).json({
+            success: false,
+            error: translateAuthCreationError(authCreateErr?.message),
+          });
+        }
+        createdAuthUser = createdAuth.user;
+      } else {
+        // Sem SUPABASE_SERVICE_ROLE_KEY: cria utilizador real via Supabase Auth signUp num cliente efémero
+        // sem alterar a sessão do administrador, e grava o perfil em public.utilizadores com o JWT RLS do admin.
+        const ephemeralAnon = getAnonSupabase();
+        const { data: signUpData, error: signUpErr } = await ephemeralAnon.auth.signUp({
+          email: cleanEmail,
+          password: cleanPass,
+          options: {
+            data: {
+              name: cleanName,
+              phone: cleanPhone,
+              branch: cleanBranch,
+              role: requestedRole,
+              company_id: resolvedCompanyId,
+              admin_created: true,
+            },
+          },
+        });
+
+        if (signUpErr) {
+          return res.status(400).json({
+            success: false,
+            error: translateAuthCreationError(signUpErr.message),
+          });
+        }
+
+        if (
+          !signUpData?.user ||
+          (Array.isArray(signUpData.user.identities) && signUpData.user.identities.length === 0)
+        ) {
+          return res.status(409).json({
+            success: false,
+            error: 'Este endereço de e-mail já se encontra registado no Supabase Auth.',
+          });
+        }
+
+        createdAuthUser = signUpData.user;
+        needsEmailConfirmation = !signUpData.session;
       }
 
-      const newUid = createdAuth.user.id;
-      const cols = await detectUtilizadoresColumns(adminSupabase);
+      const newUid = createdAuthUser.id;
+      const cols = await detectUtilizadoresColumns(dbClient);
       const utilPayload = buildAdaptiveUtilizadorPayload(
         cols,
         {
@@ -279,23 +354,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           companyId: resolvedCompanyId,
           isActive: true,
           branch: cleanBranch,
+          sellerId: newUid,
         },
         true
       );
 
-      // 2. Registar perfil em public.utilizadores
+      // 2. Registar perfil em public.utilizadores (sem coluna senha)
       const { data: insertedRow, error: utilErr } = await insertOrUpdateUtilizadorWithFallback(
-        adminSupabase,
+        dbClient,
         'insert',
         newUid,
         utilPayload
       );
 
       if (utilErr) {
-        // Reverter criação no Auth para manter consistência transacional
-        try {
-          await adminSupabase.auth.admin.deleteUser(newUid);
-        } catch {}
+        if (hasServiceRole) {
+          try {
+            await getAdminSupabase().auth.admin.deleteUser(newUid);
+          } catch {}
+        }
         return res.status(400).json({
           success: false,
           error: `Erro ao gravar em public.utilizadores: ${utilErr.message}`,
@@ -305,7 +382,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // 3. Espelhar perfil comercial em public.sellers (sem guardar senha!) para manter FKs de dívidas/clientes
       if (resolvedCompanyId) {
         try {
-          await adminSupabase
+          await dbClient
             .from('sellers')
             .upsert(
               {
@@ -316,14 +393,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 email: cleanEmail,
                 role: requestedRole,
                 company_id: resolvedCompanyId,
+                is_active: true,
               },
               { onConflict: 'id' }
             );
         } catch {}
       }
 
-      const createdProfile = mapUtilizadorRow(insertedRow || utilPayload, createdAuth.user);
-      return res.status(201).json({ success: true, user: createdProfile });
+      const createdProfile = mapUtilizadorRow(insertedRow || utilPayload, createdAuthUser);
+      const message = needsEmailConfirmation
+        ? `Utilizador real criado no Supabase Auth (${cleanEmail}) e registado em public.utilizadores. Foi enviado um e-mail de confirmação antes do primeiro acesso.`
+        : `Utilizador real criado e ativado no Supabase Auth e public.utilizadores: ${cleanName} (${cleanEmail}).`;
+
+      return res.status(201).json({
+        success: true,
+        user: createdProfile,
+        needsEmailConfirmation,
+        message,
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
@@ -341,7 +428,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ success: false, error: 'userId é obrigatório.' });
       }
 
-      const { data: existingRow, error: fetchErr } = await adminSupabase
+      const { data: existingRow, error: fetchErr } = await dbClient
         .from('utilizadores')
         .select('*')
         .eq('id', targetId)
@@ -414,28 +501,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const nextPhone = phone !== undefined ? String(phone).trim() : targetProfile.phone;
       const nextBranch = branch !== undefined ? String(branch).trim() : targetProfile.branch;
 
-      // Atualizar no Supabase Auth quando necessário
-      const authUpdate: any = {
-        user_metadata: {
-          name: nextName,
-          role: nextRole,
-          company_id: nextCompanyId,
-        },
-        ban_duration: nextIsActive ? 'none' : '876000h',
-      };
-      if (nextEmail && nextEmail !== targetProfile.email) authUpdate.email = nextEmail;
-      if (password && String(password).trim().length >= 6) authUpdate.password = String(password).trim();
+      const requestedPasswordChange = Boolean(password && String(password).trim().length >= 6);
+      const requestedEmailChange = Boolean(nextEmail && nextEmail !== targetProfile.email);
 
-      const authUidToUpdate = targetProfile.authUserId || targetProfile.id;
-      const { error: authUpdErr } = await adminSupabase.auth.admin.updateUserById(authUidToUpdate, authUpdate);
-      if (authUpdErr) {
+      if (hasServiceRole) {
+        const adminSupabase = getAdminSupabase();
+        const authUpdate: any = {
+          user_metadata: {
+            name: nextName,
+            role: nextRole,
+            company_id: nextCompanyId,
+          },
+          ban_duration: nextIsActive ? 'none' : '876000h',
+        };
+        if (requestedEmailChange) authUpdate.email = nextEmail;
+        if (requestedPasswordChange) authUpdate.password = String(password).trim();
+
+        const authUidToUpdate = targetProfile.authUserId || targetProfile.id;
+        const { error: authUpdErr } = await adminSupabase.auth.admin.updateUserById(authUidToUpdate, authUpdate);
+        if (authUpdErr) {
+          return res.status(400).json({
+            success: false,
+            error: `Erro ao atualizar autenticação no Supabase Auth: ${authUpdErr.message}`,
+          });
+        }
+      } else if (requestedPasswordChange || requestedEmailChange) {
         return res.status(400).json({
           success: false,
-          error: `Erro ao atualizar autenticação no Supabase Auth: ${authUpdErr.message}`,
+          missingServiceRoleKey: true,
+          error:
+            'Para redefinir a palavra-passe ou o e-mail de outro utilizador no Supabase Auth, configure SUPABASE_SERVICE_ROLE_KEY no servidor (ou o utilizador pode usar "Esqueceu a palavra-passe?").',
         });
       }
 
-      const cols = await detectUtilizadoresColumns(adminSupabase);
+      const cols = await detectUtilizadoresColumns(dbClient);
       const utilUpdatePayload = buildAdaptiveUtilizadorPayload(
         cols,
         {
@@ -452,7 +551,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       const { data: updatedRow, error: utilUpdErr } = await insertOrUpdateUtilizadorWithFallback(
-        adminSupabase,
+        dbClient,
         'update',
         targetProfile.id,
         utilUpdatePayload
@@ -465,7 +564,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Sincronizar tabela sellers caso exista
       if (nextCompanyId) {
         try {
-          await adminSupabase
+          await dbClient
             .from('sellers')
             .upsert(
               {
@@ -476,6 +575,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 email: nextEmail,
                 role: nextRole,
                 company_id: nextCompanyId,
+                is_active: nextIsActive,
               },
               { onConflict: 'id' }
             );
@@ -505,7 +605,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(403).json({ success: false, error: 'Não pode remover ou desativar a sua própria conta.' });
       }
 
-      const { data: existingRow } = await adminSupabase
+      const { data: existingRow } = await dbClient
         .from('utilizadores')
         .select('*')
         .eq('id', targetId)
@@ -533,44 +633,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
-      // Desativar no Auth (ban) e remover/desativar perfil conforme integridade
-      try {
-        const delAuthRes = await adminSupabase.auth.admin.deleteUser(targetProfile.authUserId || targetProfile.id);
-        if (delAuthRes.error) {
-          await adminSupabase.auth.admin.updateUserById(targetProfile.authUserId || targetProfile.id, {
-            ban_duration: '876000h',
-          });
-        }
-      } catch {
+      if (hasServiceRole) {
+        const adminSupabase = getAdminSupabase();
+        // Desativar no Auth (ban) ou remover conforme integridade
         try {
-          await adminSupabase.auth.admin.updateUserById(targetProfile.authUserId || targetProfile.id, {
-            ban_duration: '876000h',
-          });
+          const delAuthRes = await adminSupabase.auth.admin.deleteUser(targetProfile.authUserId || targetProfile.id);
+          if (delAuthRes.error) {
+            await adminSupabase.auth.admin.updateUserById(targetProfile.authUserId || targetProfile.id, {
+              ban_duration: '876000h',
+            });
+          }
+        } catch {
+          try {
+            await adminSupabase.auth.admin.updateUserById(targetProfile.authUserId || targetProfile.id, {
+              ban_duration: '876000h',
+            });
+          } catch {}
+        }
+      }
+
+      // Apenas super_admin pode apagar linha em public.utilizadores pelas políticas RLS
+      if (hasServiceRole || caller.role === 'super_admin') {
+        const { error: delErr } = await dbClient.from('utilizadores').delete().eq('id', targetProfile.id);
+        if (!delErr) {
+          return res.status(200).json({ success: true });
+        }
+      }
+
+      // Fallback seguro: desativar em public.utilizadores e public.sellers
+      const cols = await detectUtilizadoresColumns(dbClient);
+      const disablePayload = buildAdaptiveUtilizadorPayload(
+        cols,
+        {
+          id: targetProfile.id,
+          name: targetProfile.name,
+          email: targetProfile.email,
+          phone: targetProfile.phone,
+          role: targetProfile.role,
+          companyId: targetProfile.companyId,
+          isActive: false,
+        },
+        false
+      );
+      await insertOrUpdateUtilizadorWithFallback(dbClient, 'update', targetProfile.id, disablePayload);
+      if (targetProfile.companyId) {
+        try {
+          await dbClient
+            .from('sellers')
+            .update({ is_active: false })
+            .eq('id', targetProfile.sellerId || targetProfile.id);
         } catch {}
       }
 
-      const { error: delErr } = await adminSupabase.from('utilizadores').delete().eq('id', targetProfile.id);
-      if (delErr) {
-        // Se existir FK histórica, desativa em vez de apagar
-        const cols = await detectUtilizadoresColumns(adminSupabase);
-        const disablePayload = buildAdaptiveUtilizadorPayload(
-          cols,
-          {
-            id: targetProfile.id,
-            name: targetProfile.name,
-            email: targetProfile.email,
-            phone: targetProfile.phone,
-            role: targetProfile.role,
-            companyId: targetProfile.companyId,
-            isActive: false,
-          },
-          false
-        );
-        await insertOrUpdateUtilizadorWithFallback(adminSupabase, 'update', targetProfile.id, disablePayload);
-        return res.status(200).json({ success: true, deactivatedOnly: true });
-      }
-
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ success: true, deactivatedOnly: true });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }

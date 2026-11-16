@@ -33,6 +33,23 @@ async function upsertCompanyWithAdaptiveFallback(
   return { data: null, error: { message: 'Não foi possível gravar em public.company_settings.' } };
 }
 
+function translateCompanyPgError(err: any): string {
+  const code = String(err?.code || '').toUpperCase();
+  const msg = String(err?.message || '');
+  const lower = msg.toLowerCase();
+
+  if (code === 'PGRST205' || code === '42P01' || lower.includes('schema cache') || lower.includes('could not find the table')) {
+    return 'A tabela public.company_settings ainda não foi criada no Supabase. Clique em "Comandos SQL Supabase" e execute o script supabase-schema.sql no SQL Editor do Supabase.';
+  }
+  if (code === '42501' || lower.includes('row-level security') || lower.includes('permission denied')) {
+    return `Permissão negada pelas políticas RLS da tabela public.company_settings (${msg || '42501'}). Clique em "Abrir SQL Supabase" e execute o script supabase-schema.sql atualizado no SQL Editor do Supabase.`;
+  }
+  if (code === '23505' || lower.includes('duplicate key')) {
+    return 'Já existe uma empresa registada com este identificador ou dados únicos.';
+  }
+  return msg || 'Não foi possível guardar a empresa no Supabase.';
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const auth = await authenticateRequest(req);
   if (!auth.ok) {
@@ -56,7 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const { data, error } = await query;
     if (error) {
-      return res.status(400).json({ success: false, error: error.message });
+      return res.status(400).json({ success: false, error: translateCompanyPgError(error) });
     }
     return res.status(200).json({ success: true, companies: data || [] });
   }
@@ -106,13 +123,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (caller.role === 'super_admin') {
       payload.status = company.status === 'inativo' ? 'inativo' : 'ativo';
-      payload.super_admin_id = PRESERVED_SUPER_ADMIN_UUID;
+      payload.super_admin_id = caller.id || PRESERVED_SUPER_ADMIN_UUID;
     }
 
     const { data, error } = await upsertCompanyWithAdaptiveFallback(db, payload);
 
     if (error) {
-      return res.status(400).json({ success: false, error: error.message });
+      return res.status(400).json({ success: false, error: translateCompanyPgError(error) });
     }
 
     return res.status(200).json({ success: true, company: data });
@@ -129,7 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const { error } = await db.from('company_settings').delete().eq('id', compId);
     if (error) {
-      return res.status(400).json({ success: false, error: error.message });
+      return res.status(400).json({ success: false, error: translateCompanyPgError(error) });
     }
     return res.status(200).json({ success: true });
   }

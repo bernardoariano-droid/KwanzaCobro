@@ -102,7 +102,7 @@ export function mapUtilizadorRow(row: Record<string, any>, fallbackAuthUser?: Us
   const rawRole = row.role ?? row.perfil ?? row.tipo ?? fallbackAuthUser?.user_metadata?.role;
   const role = normalizeServerRole(rawRole);
   const rawActive = row.ativo ?? row.active ?? row.is_active;
-  const rawStatus = String(row.status || '').toLowerCase();
+  const rawStatus = String(row.status || row.estado || '').toLowerCase();
   const isActive = rawActive !== false && rawStatus !== 'inativo' && rawStatus !== 'bloqueado' && rawStatus !== 'suspenso';
   const authUid = String(row.auth_user_id || row.user_id || row.id || fallbackAuthUser?.id || '');
 
@@ -121,7 +121,10 @@ export function mapUtilizadorRow(row: Record<string, any>, fallbackAuthUser?: Us
   };
 }
 
-export async function fetchProfileByAuthUid(client: SupabaseClient, authUser: User): Promise<Record<string, any> | null> {
+export async function fetchProfileByAuthUid(client: SupabaseClient, authUser: User): Promise<{
+  row: Record<string, any> | null;
+  error?: { code?: string; message?: string } | null;
+}> {
   // 1. Tentar corresponder por id = auth.uid()
   const byId = await client
     .from('utilizadores')
@@ -130,7 +133,7 @@ export async function fetchProfileByAuthUid(client: SupabaseClient, authUser: Us
     .maybeSingle();
 
   if (!byId.error && byId.data) {
-    return byId.data;
+    return { row: byId.data };
   }
 
   // 2. Fallback caso o schema utilize auth_user_id = auth.uid()
@@ -141,10 +144,22 @@ export async function fetchProfileByAuthUid(client: SupabaseClient, authUser: Us
     .maybeSingle();
 
   if (!byAuthUserId.error && byAuthUserId.data) {
-    return byAuthUserId.data;
+    return { row: byAuthUserId.data };
   }
 
-  return null;
+  // 3. Fallback caso o schema utilize user_id = auth.uid()
+  const byUserId = await client
+    .from('utilizadores')
+    .select('*')
+    .eq('user_id', authUser.id)
+    .maybeSingle();
+
+  if (!byUserId.error && byUserId.data) {
+    return { row: byUserId.data };
+  }
+
+  const dbError = byId.error || byAuthUserId.error || byUserId.error || null;
+  return { row: null, error: dbError };
 }
 
 export async function authenticateRequest(req: any): Promise<
@@ -173,20 +188,40 @@ export async function authenticateRequest(req: any): Promise<
   }
 
   const authUser = userData.user;
-  let profileRow = await fetchProfileByAuthUid(userSupabase, authUser);
+  const profileLookup = await fetchProfileByAuthUid(userSupabase, authUser);
+  let profileRow = profileLookup.row;
 
   // Fallback seguro caso apenas service_role consiga consultar um perfil ainda sem policy específica,
   // mantendo a verificação estrita pelo auth.uid() já validado acima.
   if (!profileRow && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     try {
       const adminSupabase = getAdminSupabase();
-      profileRow = await fetchProfileByAuthUid(adminSupabase, authUser);
+      const adminLookup = await fetchProfileByAuthUid(adminSupabase, authUser);
+      profileRow = adminLookup.row;
     } catch {
       // Ignorar se service_role indisponível
     }
   }
 
   if (!profileRow) {
+    const dbErrMsg = profileLookup.error?.message;
+    const dbErrCode = String(profileLookup.error?.code || '').toUpperCase();
+    if (
+      dbErrMsg &&
+      (dbErrCode === '42P13' ||
+        dbErrCode === '42703' ||
+        dbErrCode === '42883' ||
+        dbErrCode === 'PGRST205' ||
+        dbErrMsg.toLowerCase().includes('return type mismatch') ||
+        dbErrMsg.toLowerCase().includes('does not exist'))
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        error: `A estrutura ou função SQL no Supabase precisa de atualização (${dbErrMsg}). Clique em "Ver / Copiar SQL" e execute o script supabase-schema.sql atualizado no SQL Editor do Supabase.`,
+      };
+    }
+
     return {
       ok: false,
       status: 403,

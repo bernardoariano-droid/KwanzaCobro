@@ -18,12 +18,16 @@ import {
   Trash2,
   ShieldCheck,
   KeyRound,
-  AlertCircle
+  AlertCircle,
+  UserCheck,
+  Lock,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { CompanySettings, Seller, Client, Debt, Utilizador } from '../types/debt';
 import { formatKwanza } from '../utils/formatters';
 import { TempSuperAdminPasswordModal } from './TempSuperAdminPasswordModal';
-import { fetchSupabaseSchemaSql } from '../lib/supabase';
+import { fetchSupabaseSchemaSql, sanitizeAndValidateEmail } from '../lib/supabase';
 
 function generateCompanyUuid(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -36,11 +40,27 @@ function generateCompanyUuid(): string {
   });
 }
 
+export interface CreateCompanyAdminInput {
+  name: string;
+  email: string;
+  password: string;
+  phone: string;
+  branch: string;
+  role: 'admin_geral';
+  companyId: string;
+}
+
 interface CompaniesManagementViewProps {
   companies: CompanySettings[];
   activeCompanyId: string;
   onSelectActiveCompany: (companyId: string) => void;
   onSaveCompany: (company: CompanySettings) => Promise<{ success: boolean; error?: string } | void> | void;
+  onCreateCompanyAdmin?: (input: CreateCompanyAdminInput) => Promise<{
+    success: boolean;
+    error?: string;
+    needsEmailConfirmation?: boolean;
+    message?: string;
+  }>;
   onDeleteCompany?: (companyId: string) => Promise<{ success: boolean; error?: string } | void> | void;
   onManageCompanyUsers?: (companyId: string) => void;
   utilizadores?: Utilizador[];
@@ -54,6 +74,7 @@ export const CompaniesManagementView: React.FC<CompaniesManagementViewProps> = (
   activeCompanyId,
   onSelectActiveCompany,
   onSaveCompany,
+  onCreateCompanyAdmin,
   onDeleteCompany,
   onManageCompanyUsers,
   utilizadores = [],
@@ -72,7 +93,7 @@ export const CompaniesManagementView: React.FC<CompaniesManagementViewProps> = (
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
 
-  // Formulário de Cadastro / Edição
+  // Formulário de Cadastro / Edição da Empresa
   const [formId, setFormId] = useState('');
   const [formName, setFormName] = useState('');
   const [formNif, setFormNif] = useState('');
@@ -86,6 +107,14 @@ export const CompaniesManagementView: React.FC<CompaniesManagementViewProps> = (
   const [formPenalty, setFormPenalty] = useState(0.1);
   const [formDueDays, setFormDueDays] = useState(5);
   const [formStatus, setFormStatus] = useState<'ativo' | 'inativo'>('ativo');
+
+  // Administrador da Empresa (criado automaticamente ao cadastrar nova empresa)
+  const [adminName, setAdminName] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminPhone, setAdminPhone] = useState('+244 9');
+  const [adminBranch, setAdminBranch] = useState('Sede');
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const openNewCompanyModal = () => {
@@ -103,6 +132,12 @@ export const CompaniesManagementView: React.FC<CompaniesManagementViewProps> = (
     setFormPenalty(0.1);
     setFormDueDays(5);
     setFormStatus('ativo');
+    setAdminName('');
+    setAdminEmail('');
+    setAdminPassword('');
+    setAdminPhone('+244 9');
+    setAdminBranch('Sede');
+    setShowAdminPassword(false);
     setEditingCompany(null);
     setFeedbackError(null);
     setIsModalOpen(true);
@@ -131,8 +166,30 @@ export const CompaniesManagementView: React.FC<CompaniesManagementViewProps> = (
     e.preventDefault();
     if (!formName.trim()) return;
 
-    setIsSaving(true);
     setFeedbackError(null);
+
+    const isCreatingNew = !editingCompany;
+    let validatedAdminEmail = '';
+
+    if (isCreatingNew && onCreateCompanyAdmin) {
+      if (!adminName.trim()) {
+        setFeedbackError('Informe o nome completo do Administrador da empresa.');
+        return;
+      }
+      const emailCheck = sanitizeAndValidateEmail(adminEmail);
+      if (!emailCheck.ok) {
+        setFeedbackError(emailCheck.error);
+        return;
+      }
+      validatedAdminEmail = emailCheck.email;
+
+      if (!adminPassword.trim() || adminPassword.trim().length < 6) {
+        setFeedbackError('A palavra-passe inicial do Administrador da empresa deve ter pelo menos 6 caracteres.');
+        return;
+      }
+    }
+
+    setIsSaving(true);
     const payload: CompanySettings = {
       id: formId,
       name: formName.trim(),
@@ -158,6 +215,46 @@ export const CompaniesManagementView: React.FC<CompaniesManagementViewProps> = (
         setFeedbackError(result.error || 'Não foi possível guardar a empresa no Supabase.');
         return;
       }
+
+      if (isCreatingNew && onCreateCompanyAdmin) {
+        const cleanAdminPhone = adminPhone.trim() && adminPhone.trim() !== '+244 9' && adminPhone.trim() !== '+244'
+          ? adminPhone.trim()
+          : formPhone.trim();
+        const adminRes = await onCreateCompanyAdmin({
+          name: adminName.trim(),
+          email: validatedAdminEmail,
+          password: adminPassword.trim(),
+          phone: cleanAdminPhone,
+          branch: adminBranch.trim() || 'Sede',
+          role: 'admin_geral',
+          companyId: payload.id || formId,
+        });
+
+        if (!adminRes.success) {
+          // Evitar empresa órfã sem administrador se a criação do utilizador falhar
+          if (onDeleteCompany && payload.id) {
+            try {
+              await onDeleteCompany(payload.id);
+            } catch {}
+          }
+          setFeedbackError(
+            adminRes.error ||
+              'Empresa não concluída porque falhou a criação do Administrador associado. Corrija os dados e tente novamente.'
+          );
+          return;
+        }
+
+        const successDetail = adminRes.needsEmailConfirmation
+          ? `Empresa "${payload.name}" e Administrador Geral (${validatedAdminEmail}) criados! Foi enviado um e-mail de confirmação para ativar o primeiro acesso.`
+          : `Empresa "${payload.name}" e Administrador Geral "${adminName.trim()}" (${validatedAdminEmail}) criados e ligados no Supabase!`;
+
+        setFeedbackSuccess(successDetail);
+        setAdminPassword('');
+        setTimeout(() => setFeedbackSuccess(null), 7000);
+        setIsModalOpen(false);
+        return;
+      }
+
       setFeedbackSuccess(
         editingCompany
           ? `Empresa "${payload.name}" atualizada com sucesso.`
@@ -400,9 +497,20 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
       </div>
 
       {feedbackError && (
-        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-3 text-xs text-rose-800">
-          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-          <span>{feedbackError}</span>
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start justify-between gap-3 text-xs text-rose-800">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <span>{feedbackError}</span>
+          </div>
+          {(feedbackError.toLowerCase().includes('supabase-schema.sql') || feedbackError.toLowerCase().includes('sql editor')) && (
+            <button
+              type="button"
+              onClick={handleOpenSqlModal}
+              className="shrink-0 px-3 py-1.5 text-[11px] font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-xl cursor-pointer"
+            >
+              Abrir SQL Supabase
+            </button>
+          )}
         </div>
       )}
 
@@ -717,9 +825,20 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
 
             <form onSubmit={handleSaveSubmit} className="p-6 overflow-y-auto space-y-4">
               {feedbackError && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <span>{feedbackError}</span>
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-2.5 text-xs text-rose-800">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <span>{feedbackError}</span>
+                  </div>
+                  {(feedbackError.toLowerCase().includes('supabase-schema.sql') || feedbackError.toLowerCase().includes('sql editor')) && (
+                    <button
+                      type="button"
+                      onClick={handleOpenSqlModal}
+                      className="shrink-0 px-2.5 py-1 text-[11px] font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-lg cursor-pointer"
+                    >
+                      Ver SQL
+                    </button>
+                  )}
                 </div>
               )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -772,7 +891,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
                   <input
                     type="email"
                     required
-                    placeholder="gerencia@empresa.ao"
+                    placeholder="contacto@suaempresa.com"
                     value={formEmail}
                     onChange={e => setFormEmail(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
@@ -859,6 +978,110 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
                 </div>
               </div>
 
+              {!editingCompany && onCreateCompanyAdmin && (
+                <div className="pt-4 border-t border-emerald-100 space-y-3">
+                  <div className="flex items-center justify-between gap-2 bg-emerald-50/80 border border-emerald-200 rounded-xl p-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 bg-emerald-600 text-white rounded-lg shrink-0">
+                        <UserCheck className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-emerald-950">
+                          Administrador Geral da Empresa *
+                        </h3>
+                        <p className="text-[11px] text-emerald-800">
+                          Será criado automaticamente no Supabase Auth + <code className="font-mono">public.utilizadores</code> ligado a esta empresa.
+                        </p>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-emerald-700 text-white rounded-md font-mono shrink-0">
+                      admin_geral
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Nome do Administrador *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ex: João Manuel Silva"
+                        value={adminName}
+                        onChange={e => setAdminName(e.target.value)}
+                        className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        E-mail de Acesso (Login) *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="admin.empresa@gmail.com"
+                        value={adminEmail}
+                        onChange={e => setAdminEmail(e.target.value)}
+                        className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Palavra-passe Inicial *
+                      </label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                          <Lock className="w-3.5 h-3.5" />
+                        </div>
+                        <input
+                          type={showAdminPassword ? 'text' : 'password'}
+                          required
+                          minLength={6}
+                          autoComplete="new-password"
+                          placeholder="Mínimo 6 caracteres"
+                          value={adminPassword}
+                          onChange={e => setAdminPassword(e.target.value)}
+                          className="w-full pl-8 pr-9 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminPassword(!showAdminPassword)}
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-700 cursor-pointer"
+                          tabIndex={-1}
+                        >
+                          {showAdminPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Telefone / Filial do Admin
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          placeholder="+244 923 000 000"
+                          value={adminPhone}
+                          onChange={e => setAdminPhone(e.target.value)}
+                          className="w-full px-3 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none font-mono"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Sede"
+                          value={adminBranch}
+                          onChange={e => setAdminBranch(e.target.value)}
+                          className="w-full px-3 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-600 outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
                 <button
                   type="button"
@@ -872,7 +1095,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
                   disabled={isSaving}
                   className="px-5 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-70"
                 >
-                  {isSaving ? 'A guardar...' : editingCompany ? 'Guardar Alterações' : 'Cadastrar Empresa'}
+                  {isSaving
+                    ? 'A guardar empresa e administrador...'
+                    : editingCompany
+                    ? 'Guardar Alterações'
+                    : 'Cadastrar Empresa e Administrador'}
                 </button>
               </div>
             </form>

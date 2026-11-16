@@ -74,23 +74,9 @@ import {
   saveCompanyToSupabase, 
   deleteCompanyFromSupabase,
   subscribeToSupabaseChanges, 
-  testSupabaseConnection 
+  testSupabaseConnection,
+  isManualAuthFlowActive
 } from './lib/supabase';
-import {
-  AppAuthMode,
-  getSavedAuthMode,
-  setSavedAuthMode,
-  getLocalToken,
-  fetchLocalSessionUser,
-  signOutLocalhost,
-  pullFromLocalhost,
-  syncToLocalhost,
-  createLocalUtilizador,
-  updateLocalUtilizador,
-  deleteLocalUtilizador,
-  saveLocalCompany,
-  deleteLocalCompany,
-} from './lib/localStore';
 
 const STORAGE_KEY_DEBTS = 'kwanzacobro_debts_v2';
 const STORAGE_KEY_CLIENTS = 'kwanzacobro_clients_v2';
@@ -100,8 +86,6 @@ const STORAGE_KEY_COMPANIES = 'kwanzacobro_companies_v2';
 
 export default function App() {
   const { t } = useLanguage();
-  // Estado de Autenticação Dual: Modo Localhost (Base JSON Local) ou Supabase Auth
-  const [authMode, setAuthMode] = useState<AppAuthMode>(() => getSavedAuthMode() || 'localhost');
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(false);
@@ -135,12 +119,8 @@ export default function App() {
 
   const handleLoginSuccess = (
     user: AuthUser,
-    matchedCompany?: CompanySettings,
-    mode?: AppAuthMode
+    matchedCompany?: CompanySettings
   ) => {
-    const resolvedMode: AppAuthMode = mode || getSavedAuthMode() || 'localhost';
-    setAuthMode(resolvedMode);
-    setSavedAuthMode(resolvedMode);
     setAuthError(null);
     setIsPasswordRecovery(false);
     setCurrentUser(user);
@@ -166,7 +146,10 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    signOutLocalhost();
+    try {
+      localStorage.removeItem('kwanzacobro_auth_mode');
+      localStorage.removeItem('kwanzacobro_local_token');
+    } catch {}
     try {
       await signOutSupabaseAuth();
     } catch (e) {
@@ -213,9 +196,14 @@ export default function App() {
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
 
-  // 1. Verificar sessão persistida (Localhost ou Supabase Auth) e escutar eventos de Auth
+  // 1. Verificar sessão persistida no Supabase Auth e escutar eventos de Auth
   useEffect(() => {
     let isMounted = true;
+
+    try {
+      localStorage.removeItem('kwanzacobro_auth_mode');
+      localStorage.removeItem('kwanzacobro_local_token');
+    } catch {}
 
     const hashHasRecovery =
       typeof window !== 'undefined' && window.location.hash.includes('type=recovery');
@@ -225,35 +213,12 @@ export default function App() {
 
     const restoreSession = async () => {
       try {
-        // Se existe sessão localhost ativa e o modo guardado é localhost (ou não há recovery)
-        const localToken = getLocalToken();
-        const savedMode = getSavedAuthMode();
-        if (localToken && !hashHasRecovery && savedMode !== 'supabase') {
-          const localRes = await fetchLocalSessionUser();
-          if (!isMounted) return;
-          if (localRes.ok) {
-            setAuthMode('localhost');
-            setSavedAuthMode('localhost');
-            setCurrentUser(localRes.user);
-            if (localRes.company) setCompany(localRes.company);
-            if (isSuperAdminRole(localRes.user.role)) {
-              setActiveTab(prev => (prev === 'dashboard' ? 'companies' : prev));
-            }
-            return;
-          }
-          if (localRes.error) {
-            setAuthError(localRes.error);
-          }
-        }
-
         const { data } = await supabase.auth.getSession();
         const sessionUser = data?.session?.user;
         if (sessionUser && isMounted) {
           const validation = await validateAuthenticatedUser(sessionUser);
           if (!isMounted) return;
           if (validation.ok) {
-            setAuthMode('supabase');
-            setSavedAuthMode('supabase');
             setCurrentUser(validation.user);
             if (validation.company) {
               setCompany(validation.company);
@@ -280,14 +245,13 @@ export default function App() {
       if (!isMounted) return;
 
       if (event === 'PASSWORD_RECOVERY') {
-        setAuthMode('supabase');
         setIsPasswordRecovery(true);
         setIsAuthChecking(false);
         return;
       }
 
       if (event === 'SIGNED_OUT') {
-        if (getLocalToken() && getSavedAuthMode() === 'localhost') {
+        if (isManualAuthFlowActive()) {
           return;
         }
         setCurrentUser(null);
@@ -298,15 +262,12 @@ export default function App() {
       }
 
       if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') && session?.user) {
-        // Durante migração a partir do modo localhost, manter sessão localhost ativa sem interromper UI
-        if (getLocalToken() && getSavedAuthMode() === 'localhost') {
+        if (isManualAuthFlowActive()) {
           return;
         }
         const validation = await validateAuthenticatedUser(session.user);
         if (!isMounted) return;
         if (validation.ok) {
-          setAuthMode('supabase');
-          setSavedAuthMode('supabase');
           setAuthError(null);
           setCurrentUser(validation.user);
           if (validation.company) {
@@ -326,7 +287,7 @@ export default function App() {
     };
   }, []);
 
-  // 2. Carregar dados autorizados do Localhost ou Supabase SOMENTE após autenticação válida
+  // 2. Carregar dados autorizados do Supabase SOMENTE após autenticação válida
   useEffect(() => {
     if (!currentUser) {
       hasLoadedCloudDataRef.current = false;
@@ -334,42 +295,6 @@ export default function App() {
     }
     let isMounted = true;
     hasLoadedCloudDataRef.current = false;
-
-    if (authMode === 'localhost') {
-      const loadLocalhostData = async () => {
-        try {
-          const res = await pullFromLocalhost();
-          if (res.success && res.data && isMounted) {
-            setDebts(res.data.debts);
-            setClients(res.data.clients);
-            setSellers(res.data.sellers);
-            setUtilizadores(res.data.utilizadores);
-            if (Array.isArray(res.data.companies) && res.data.companies.length > 0) {
-              setCompanies(res.data.companies);
-              const preferredId = isSuperAdminRole(currentUser.role)
-                ? (company.id || currentUser.companyId || 'default_company')
-                : (currentUser.companyId || 'default_company');
-              const matched = res.data.companies.find(c => (c.id || 'default_company') === preferredId);
-              setCompany(matched || res.data.company || initialCompanySettings);
-            } else if (res.data.company) {
-              setCompany(res.data.company);
-            }
-            setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
-          }
-        } catch (err) {
-          console.warn('Erro ao carregar dados do localhost:', err);
-        } finally {
-          if (isMounted) {
-            hasLoadedCloudDataRef.current = true;
-          }
-        }
-      };
-
-      loadLocalhostData();
-      return () => {
-        isMounted = false;
-      };
-    }
 
     const loadAuthorizedCloudData = async () => {
       try {
@@ -520,24 +445,13 @@ export default function App() {
       isMounted = false;
       unsubscribe();
     };
-  }, [currentUser?.id, currentUser?.companyId, currentUser?.role, authMode]);
+  }, [currentUser?.id, currentUser?.companyId, currentUser?.role]);
 
   // Sincronização manual acionada pelo utilizador autenticado
   const handleManualSyncNow = async () => {
     if (!currentUser) return;
     setIsManualSyncing(true);
     try {
-      if (authMode === 'localhost') {
-        const localSync = await syncToLocalhost({ debts, clients, sellers, company, companies });
-        if (localSync.success) {
-          setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
-          showAppNotice('success', 'Dados guardados no Localhost (data/neurojus_db.json) com sucesso!');
-        } else {
-          showAppNotice('error', localSync.message || 'Erro ao guardar no Localhost.');
-        }
-        return;
-      }
-
       const syncRes = await syncToSupabase({ debts, clients, sellers, company, companies });
       if (syncRes.success) {
         setIsSupabaseSynced(true);
@@ -639,19 +553,11 @@ export default function App() {
     }
   }, [companies, currentUser]);
 
-  // Sincronização automática autenticada para Localhost ou Supabase
+  // Sincronização automática autenticada para Supabase
   useEffect(() => {
     if (!currentUser || !hasLoadedCloudDataRef.current) return;
     const timer = setTimeout(async () => {
       try {
-        if (authMode === 'localhost') {
-          const localRes = await syncToLocalhost({ debts, clients, sellers, company, companies });
-          if (localRes.success) {
-            setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
-          }
-          return;
-        }
-
         const token = await getSupabaseAccessToken();
         if (!token) return;
         const supRes = await fetch('/api/supabase/sync', {
@@ -674,7 +580,7 @@ export default function App() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [debts, clients, sellers, company, companies, currentUser, authMode]);
+  }, [debts, clients, sellers, company, companies, currentUser]);
 
   // Navegação
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -808,10 +714,7 @@ export default function App() {
         } catch {}
         return updated;
       });
-      // Persistir no Supabase quando em modo Cloud
-      if (authMode === 'supabase') {
-        saveClientToSupabase(autoClient).catch(() => {});
-      }
+      saveClientToSupabase(autoClient).catch(() => {});
     }
 
     const newDebt: Debt = {
@@ -824,17 +727,14 @@ export default function App() {
     };
     setDebts(prev => [newDebt, ...prev]);
 
-    if (authMode === 'supabase') {
-      // Persistência Direta no Supabase
-      saveDebtToSupabase(newDebt).then(res => {
-        if (res.success) {
-          setIsSupabaseSynced(true);
-          setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
-        }
-      }).catch(err => {
-        console.warn('Erro ao salvar dívida no Supabase:', err);
-      });
-    }
+    saveDebtToSupabase(newDebt).then(res => {
+      if (res.success) {
+        setIsSupabaseSynced(true);
+        setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
+      }
+    }).catch(err => {
+      console.warn('Erro ao salvar dívida no Supabase:', err);
+    });
 
     // GERAÇÃO AUTOMÁTICA DO RECIBO EM PDF APÓS GRAVAR!
     setNewlyCreatedDebtForReceipt(newDebt);
@@ -901,8 +801,8 @@ export default function App() {
         return updatedDebt;
       });
 
-      // Persistir amortização no Supabase quando em modo Cloud
-      if (debtToSave && authMode === 'supabase') {
+      // Persistir amortização no Supabase
+      if (debtToSave) {
         savePaymentToSupabase(debtId, payment, debtToSave).then(res => {
           if (res.success) {
             setIsSupabaseSynced(true);
@@ -937,7 +837,7 @@ export default function App() {
         return updated;
       });
 
-      if (debtToSave && authMode === 'supabase') {
+      if (debtToSave) {
         saveDebtToSupabase(debtToSave).then(res => {
           if (res.success) setIsSupabaseSynced(true);
         }).catch(() => {});
@@ -961,16 +861,14 @@ export default function App() {
       createdAt: new Date().toISOString(),
     };
     setClients(prev => [...prev, newClient]);
-    if (authMode === 'supabase') {
-      saveClientToSupabase(newClient).then(res => {
-        if (res.success) {
-          setIsSupabaseSynced(true);
-          setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
-        }
-      }).catch(err => {
-        console.warn('Erro ao salvar cliente no Supabase:', err);
-      });
-    }
+    saveClientToSupabase(newClient).then(res => {
+      if (res.success) {
+        setIsSupabaseSynced(true);
+        setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
+      }
+    }).catch(err => {
+      console.warn('Erro ao salvar cliente no Supabase:', err);
+    });
   };
 
   // Bloqueio de Segurança: Restrição estrita por perfil
@@ -983,7 +881,9 @@ export default function App() {
     }
   }, [currentUser, activeTab]);
 
-  const handleAddSeller = async (input: CreateUserInput): Promise<{ success: boolean; error?: string }> => {
+  const handleAddSeller = async (
+    input: CreateUserInput
+  ): Promise<{ success: boolean; error?: string; needsEmailConfirmation?: boolean; message?: string }> => {
     const payload = {
       name: input.name,
       email: input.email,
@@ -994,10 +894,7 @@ export default function App() {
       companyId: input.companyId || activeCompanyId,
     };
 
-    const res =
-      authMode === 'localhost'
-        ? await createLocalUtilizador(payload)
-        : await createAuthorizedUtilizador(payload);
+    const res = await createAuthorizedUtilizador(payload);
 
     if (!res.success || !res.user) {
       return { success: false, error: res.error || 'Erro ao criar utilizador no servidor.' };
@@ -1019,16 +916,17 @@ export default function App() {
       };
       setSellers(prev => [mirroredSeller, ...prev.filter(s => s.id !== mirroredSeller.id)]);
     }
-    if (authMode === 'supabase') setIsSupabaseSynced(true);
+    setIsSupabaseSynced(true);
     setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
-    return { success: true };
+    return {
+      success: true,
+      needsEmailConfirmation: res.needsEmailConfirmation,
+      message: res.message,
+    };
   };
 
   const handleUpdateSeller = async (input: UpdateUserInput): Promise<{ success: boolean; error?: string }> => {
-    const res =
-      authMode === 'localhost'
-        ? await updateLocalUtilizador(input)
-        : await updateAuthorizedUtilizador(input);
+    const res = await updateAuthorizedUtilizador(input);
     if (!res.success || !res.user) {
       return { success: false, error: res.error || 'Erro ao atualizar utilizador no servidor.' };
     }
@@ -1051,16 +949,13 @@ export default function App() {
           : s
       )
     );
-    if (authMode === 'supabase') setIsSupabaseSynced(true);
+    setIsSupabaseSynced(true);
     setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
     return { success: true };
   };
 
   const handleDeleteSeller = async (userId: string): Promise<{ success: boolean; error?: string }> => {
-    const res =
-      authMode === 'localhost'
-        ? await deleteLocalUtilizador(userId)
-        : await deleteAuthorizedUtilizador(userId);
+    const res = await deleteAuthorizedUtilizador(userId);
     if (!res.success) {
       showAppNotice('error', res.error || 'Não foi possível remover o utilizador.');
       return { success: false, error: res.error };
@@ -1091,10 +986,7 @@ export default function App() {
     };
 
     try {
-      const res =
-        authMode === 'localhost'
-          ? await saveLocalCompany(normalized)
-          : await saveCompanyToSupabase(normalized);
+      const res = await saveCompanyToSupabase(normalized);
       if (!res.success) {
         return { success: false, error: res.error || 'Não foi possível guardar a empresa.' };
       }
@@ -1115,7 +1007,7 @@ export default function App() {
         localStorage.setItem(STORAGE_KEY_COMPANY, JSON.stringify(normalized));
       } catch {}
 
-      if (authMode === 'supabase') setIsSupabaseSynced(true);
+      setIsSupabaseSynced(true);
       setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
       return { success: true };
     } catch (err: any) {
@@ -1150,19 +1042,22 @@ export default function App() {
     }
 
     try {
-      const res =
-        authMode === 'localhost'
-          ? await deleteLocalCompany(companyId)
-          : await deleteCompanyFromSupabase(companyId);
+      const res = await deleteCompanyFromSupabase(companyId);
       if (!res.success) {
         return { success: false, error: res.error || 'Não foi possível remover a empresa.' };
       }
 
       setCompanies(prev => {
         const next = prev.filter(c => (c.id || 'default_company') !== companyId);
+        try {
+          localStorage.setItem(STORAGE_KEY_COMPANIES, JSON.stringify(next));
+        } catch {}
         if ((company.id || 'default_company') === companyId) {
           const fallback = next.find(c => c.id === 'default_company') || next[0] || initialCompanySettings;
           setCompany(fallback);
+          try {
+            localStorage.setItem(STORAGE_KEY_COMPANY, JSON.stringify(fallback));
+          } catch {}
         }
         return next;
       });
@@ -1330,7 +1225,6 @@ export default function App() {
           isSyncing={isManualSyncing}
           isSupabaseConnected={isSupabaseSynced}
           lastSyncTime={lastSyncTime}
-          authMode={authMode}
         />
 
         {/* Viewport Principal dos Módulos */}
@@ -1357,6 +1251,7 @@ export default function App() {
               activeCompanyId={activeCompanyId}
               onSelectActiveCompany={handleSelectActiveCompany}
               onSaveCompany={handleSaveCompany}
+              onCreateCompanyAdmin={handleAddSeller}
               onDeleteCompany={handleDeleteCompany}
               onManageCompanyUsers={handleManageCompanyUsers}
               utilizadores={utilizadores}
@@ -1525,14 +1420,6 @@ export default function App() {
               allSellers={isSuperAdminRole(currentUser?.role) ? sellers : companySellers}
               onRestoreDemoData={handleRestoreDemoData}
               onImportAllData={handleImportAllData}
-              authMode={authMode}
-              onMigrationSuccess={() => {
-                setIsSupabaseSynced(true);
-                showAppNotice(
-                  'success',
-                  'Dados migrados do Localhost para o Supabase com sucesso! Pode continuar no Localhost ou alternar para Supabase Cloud no login.'
-                );
-              }}
             />
           )}
 
@@ -1567,14 +1454,12 @@ export default function App() {
               <span aria-hidden="true">·</span>
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span>{authMode === 'localhost' ? 'Modo Localhost Ativo (Base JSON)' : 'Armazenamento Local Ativo'}</span>
+                <span>Supabase Auth Ativo</span>
               </span>
-              {authMode === 'supabase' && (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs">
-                  <span className={`w-1.5 h-1.5 rounded-full ${isSupabaseSynced ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
-                  <span>Supabase Conectado {supabaseLatency !== null ? `(${supabaseLatency}ms)` : ''}</span>
-                </span>
-              )}
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs">
+                <span className={`w-1.5 h-1.5 rounded-full ${isSupabaseSynced ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+                <span>Supabase Conectado {supabaseLatency !== null ? `(${supabaseLatency}ms)` : ''}</span>
+              </span>
             </div>
             <div className="flex items-center gap-3">
               {lastSyncTime && (

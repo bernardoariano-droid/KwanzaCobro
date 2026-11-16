@@ -57,7 +57,9 @@ interface SellersViewProps {
   utilizadores?: Utilizador[];
   debts: Debt[];
   currentUser?: AuthUser | null;
-  onAddSeller: (user: CreateUserInput) => Promise<{ success: boolean; error?: string }> | void;
+  onAddSeller: (
+    user: CreateUserInput
+  ) => Promise<{ success: boolean; error?: string; needsEmailConfirmation?: boolean; message?: string }> | void;
   onUpdateSeller?: (user: UpdateUserInput) => Promise<{ success: boolean; error?: string }> | void;
   onDeleteSeller?: (sellerId: string) => Promise<{ success: boolean; error?: string }> | void;
   onFilterDebtsBySeller: (sellerId: string) => void;
@@ -237,7 +239,8 @@ export const SellersView: React.FC<SellersViewProps> = ({
           return;
         }
         setSuccessMessage(
-          `Utilizador criado no Supabase Auth e registado em public.utilizadores: ${name.trim()} (${email.trim().toLowerCase()})`
+          res?.message ||
+            `Utilizador criado no Supabase Auth e registado em public.utilizadores: ${name.trim()} (${email.trim().toLowerCase()})`
         );
       }
 
@@ -481,7 +484,7 @@ export const SellersView: React.FC<SellersViewProps> = ({
               <input
                 type="email"
                 required
-                placeholder="utilizador@empresa.ao"
+                placeholder="utilizador@gmail.com"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 className="w-full py-2 px-3 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white"

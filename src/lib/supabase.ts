@@ -43,7 +43,7 @@ export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON
 export function mapUtilizadorFromRow(row: Record<string, any>, authUser?: User | null): Utilizador {
   const rawRole = row.role ?? row.perfil ?? row.tipo ?? authUser?.user_metadata?.role;
   const rawActive = row.ativo ?? row.active ?? row.is_active;
-  const rawStatus = String(row.status || '').toLowerCase();
+  const rawStatus = String(row.status || row.estado || '').toLowerCase();
   const isActive =
     rawActive !== false &&
     rawStatus !== 'inativo' &&
@@ -100,20 +100,166 @@ export async function fetchUtilizadorProfile(authUser: User): Promise<Utilizador
     return mapUtilizadorFromRow(byAuthUserId.data, authUser);
   }
 
+  // 3. Fallback caso a tabela relacione via user_id
+  const byUserId = await supabase
+    .from('utilizadores')
+    .select('*')
+    .eq('user_id', authUser.id)
+    .maybeSingle();
+
+  if (!byUserId.error && byUserId.data) {
+    return mapUtilizadorFromRow(byUserId.data, authUser);
+  }
+
+  // 4. Fallback por email (útil quando RLS permite leitura via super_admin)
+  if (authUser.email) {
+    const byEmail = await supabase
+      .from('utilizadores')
+      .select('*')
+      .ilike('email', authUser.email.trim().toLowerCase())
+      .maybeSingle();
+
+    if (!byEmail.error && byEmail.data) {
+      return mapUtilizadorFromRow(byEmail.data, authUser);
+    }
+  }
+
   return null;
 }
+
+let manualAuthFlowDepth = 0;
+
+export function isManualAuthFlowActive(): boolean {
+  return manualAuthFlowDepth > 0;
+}
+
+const inFlightValidations = new Map<
+  string,
+  Promise<{ ok: true; user: AuthUser; company?: CompanySettings } | { ok: false; error: string }>
+>();
 
 export async function validateAuthenticatedUser(authUser: User): Promise<
   | { ok: true; user: AuthUser; company?: CompanySettings }
   | { ok: false; error: string }
 > {
-  const profile = await fetchUtilizadorProfile(authUser);
+  const cacheKey = String(authUser.id || '');
+  const existingPromise = inFlightValidations.get(cacheKey);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const work = validateAuthenticatedUserInternal(authUser).finally(() => {
+    inFlightValidations.delete(cacheKey);
+  });
+  inFlightValidations.set(cacheKey, work);
+  return work;
+}
+
+async function validateAuthenticatedUserInternal(authUser: User): Promise<
+  | { ok: true; user: AuthUser; company?: CompanySettings }
+  | { ok: false; error: string }
+> {
+  // Verificar se a tabela utilizadores já existe; caso falhe com PGRST205, orientar execução do supabase-schema.sql
+  const schemaProbe = await supabase
+    .from('utilizadores')
+    .select('*')
+    .eq('id', authUser.id)
+    .maybeSingle();
+
+  if (schemaProbe.error) {
+    const errMsg = String(schemaProbe.error.message || '').toLowerCase();
+    const errCode = String(schemaProbe.error.code || '').toUpperCase();
+    const isMissingColumnOrFuncMismatch =
+      errCode === '42703' ||
+      errCode === '42P13' ||
+      errCode === '42883' ||
+      errCode === '42804' ||
+      /column\s+.+\s+does not exist/i.test(errMsg) ||
+      errMsg.includes('return type mismatch') ||
+      errMsg.includes('operator does not exist');
+    const isMissingTable =
+      !isMissingColumnOrFuncMismatch &&
+      (errCode === 'PGRST205' ||
+        errCode === '42P01' ||
+        errMsg.includes('schema cache') ||
+        errMsg.includes('could not find the table') ||
+        /relation\s+["']?[^"']+["']?\s+does not exist/i.test(errMsg));
+
+    if (isMissingColumnOrFuncMismatch) {
+      await supabase.auth.signOut().catch(() => {});
+      return {
+        ok: false,
+        error: `A estrutura ou função SQL no Supabase precisa de atualização (${schemaProbe.error.message}). Clique em "Ver / Copiar SQL" e execute o script supabase-schema.sql atualizado no SQL Editor do Supabase.`,
+      };
+    }
+
+    if (isMissingTable) {
+      await supabase.auth.signOut().catch(() => {});
+      return {
+        ok: false,
+        error:
+          'As tabelas do sistema ainda não foram criadas no Supabase (public.utilizadores / public.company_settings). Clique em "Ver / Copiar SQL" e execute o script supabase-schema.sql no SQL Editor do Supabase.',
+      };
+    }
+  }
+
+  let profile: Utilizador | null = null;
+  if (!schemaProbe.error && schemaProbe.data) {
+    profile = mapUtilizadorFromRow(schemaProbe.data, authUser);
+  } else {
+    profile = await fetchUtilizadorProfile(authUser);
+  }
 
   if (!profile) {
-    // Fallback autenticado via backend /api/auth/me usando o JWT real do Supabase Auth
+    // Fallback autenticado via backend /api/auth/register (se self_register) e /api/auth/me usando o JWT real do Supabase Auth
     try {
       const token = await getSupabaseAccessToken();
       if (token) {
+        const meta = (authUser.user_metadata || {}) as Record<string, any>;
+        if (meta.self_register && meta.company_name) {
+          const regRes = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              name: meta.name || authUser.email?.split('@')[0] || 'Administrador',
+              email: authUser.email,
+              phone: meta.phone || '',
+              companyName: meta.company_name,
+              nif: meta.nif || '',
+              branch: meta.branch || 'Sede',
+            }),
+          }).catch(() => null);
+
+          if (regRes) {
+            const regJson = await regRes.json().catch(() => null);
+            if (!regRes.ok && regJson?.error) {
+              await supabase.auth.signOut().catch(() => {});
+              return { ok: false, error: translateSupabaseErrorMessage(regJson.error) };
+            }
+            if (regRes.ok && regJson?.success && regJson?.user) {
+              const mappedCompany = regJson.company ? mapCompanyFromSupabase(regJson.company) : undefined;
+              return {
+                ok: true,
+                user: {
+                  id: regJson.user.id,
+                  name: regJson.user.name,
+                  email: regJson.user.email,
+                  phone: regJson.user.phone || '',
+                  role: regJson.user.role,
+                  branch: regJson.user.branch,
+                  companyId: regJson.user.companyId,
+                  sellerId: regJson.user.sellerId || regJson.user.id,
+                  isActive: regJson.user.isActive !== false,
+                },
+                company: mappedCompany,
+              };
+            }
+          }
+        }
+
         const res = await fetch('/api/auth/me', {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -127,7 +273,7 @@ export async function validateAuthenticatedUser(authUser: User): Promise<
         }
         if (json?.error) {
           await supabase.auth.signOut().catch(() => {});
-          return { ok: false, error: json.error };
+          return { ok: false, error: translateSupabaseErrorMessage(json.error) };
         }
       }
     } catch {
@@ -188,16 +334,55 @@ export async function validateAuthenticatedUser(authUser: User): Promise<
   };
 }
 
-function translateSupabaseAuthError(message?: string): string {
-  const msg = String(message || '').toLowerCase();
+export function translateSupabaseErrorMessage(message?: string): string {
+  const raw = String(message || '').trim();
+  const msg = raw.toLowerCase();
+
+  if (
+    msg.includes('42703') ||
+    msg.includes('42p13') ||
+    msg.includes('42883') ||
+    msg.includes('return type mismatch') ||
+    /column\s+.+\s+does not exist/i.test(msg)
+  ) {
+    return `Falta atualizar uma coluna ou função SQL no Supabase (${raw}). Clique em "Ver / Copiar SQL" e execute o script supabase-schema.sql atualizado no SQL Editor do Supabase.`;
+  }
+  if (
+    msg.includes('pgrst205') ||
+    msg.includes('pgrst202') ||
+    msg.includes('schema cache') ||
+    msg.includes('could not find the table') ||
+    msg.includes('could not find the function') ||
+    /relation\s+["']?[^"']+["']?\s+does not exist/i.test(msg)
+  ) {
+    return 'As tabelas ou funções do sistema ainda não foram criadas no Supabase. Clique em "Ver / Copiar SQL" e execute o script supabase-schema.sql no SQL Editor do Supabase.';
+  }
+  if (msg.includes('database error saving new user')) {
+    return 'Erro interno na base de dados do Supabase ao criar o utilizador (trigger auth.users). Execute o script supabase-schema.sql atualizado no SQL Editor do Supabase e tente novamente.';
+  }
+  if (msg.includes('error sending confirmation email') || msg.includes('error sending email')) {
+    return 'O Supabase Auth não conseguiu enviar o e-mail de confirmação (limite SMTP ou configuração de e-mail). No painel Supabase -> Authentication -> Providers -> Email, desative "Confirm email" ou configure um SMTP personalizado.';
+  }
+  if (msg.includes('email rate limit') || msg.includes('over_email_send_rate_limit')) {
+    return 'Limite de envio de e-mails do Supabase Auth atingido. Aguarde alguns minutos ou desative "Confirm email" em Authentication -> Providers -> Email no painel Supabase.';
+  }
+  if (msg.includes('email_address_invalid') || (msg.includes('email address') && msg.includes('invalid'))) {
+    return 'O endereço de e-mail não foi aceite pelo Supabase Auth. Utilize um e-mail com domínio real e ativo (ex: @gmail.com, @outlook.com) — endereços fictícios (como @empresa.ao ou @teste.com), com espaços ou acentos são rejeitados pelo servidor. Se estiver a testar, desative também "Confirm email" em Authentication -> Providers -> Email no painel Supabase.';
+  }
+  if (msg.includes('row-level security')) {
+    return 'Permissão negada pelas políticas de segurança (RLS) do Supabase para esta operação.';
+  }
+  if (msg.includes('duplicate key')) {
+    return 'Já existe um registo no Supabase com estes dados únicos.';
+  }
   if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials')) {
     return 'E-mail ou palavra-passe incorretos. Verifique as suas credenciais.';
   }
   if (msg.includes('email not confirmed')) {
-    return 'O seu e-mail ainda não foi confirmado. Verifique a sua caixa de entrada.';
+    return 'O seu e-mail ainda não foi confirmado. Verifique a sua caixa de entrada ou peça ao administrador para confirmar.';
   }
   if (msg.includes('user already registered') || msg.includes('already exists')) {
-    return 'Este endereço de e-mail já está registado. Tente iniciar sessão ou recuperar a palavra-passe.';
+    return 'Este e-mail já está registado no Supabase Auth. Tente entrar em "Iniciar Sessão" ou recuperar a palavra-passe.';
   }
   if (msg.includes('password should be at least') || msg.includes('weak_password')) {
     return 'A palavra-passe deve ter pelo menos 6 caracteres.';
@@ -211,7 +396,46 @@ function translateSupabaseAuthError(message?: string): string {
   if (msg.includes('network') || msg.includes('failed to fetch')) {
     return 'Erro de ligação ao servidor Supabase Auth. Verifique a sua internet.';
   }
-  return message || 'Não foi possível autenticar.';
+  return raw || 'Não foi possível concluir a operação no Supabase.';
+}
+
+function translateSupabaseAuthError(message?: string): string {
+  return translateSupabaseErrorMessage(message);
+}
+
+export function sanitizeAndValidateEmail(rawEmail: string): { ok: true; email: string } | { ok: false; error: string } {
+  // Remove espaços acidentais e normaliza para minúsculas
+  const cleaned = String(rawEmail || '').replace(/\s+/g, '').trim().toLowerCase();
+  const basicRegex = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
+  if (!cleaned || !basicRegex.test(cleaned)) {
+    return {
+      ok: false,
+      error: 'Introduza um endereço de e-mail válido, sem espaços nem acentos (ex: seu.nome@gmail.com).',
+    };
+  }
+
+  const domain = cleaned.split('@')[1] || '';
+  const placeholderDomains = new Set([
+    'empresa.ao',
+    'teste.ao',
+    'exemplo.ao',
+    'teste.com',
+    'test.com',
+    'example.com',
+    'example.org',
+    'example.net',
+    'exemplo.com',
+    'invalid',
+    'localhost',
+  ]);
+  if (placeholderDomains.has(domain)) {
+    return {
+      ok: false,
+      error: `O domínio "@${domain}" é fictício/de exemplo e é bloqueado pelo Supabase Auth. Utilize um e-mail real e ativo (ex: @gmail.com, @outlook.com ou o domínio real da sua empresa).`,
+    };
+  }
+
+  return { ok: true, email: cleaned };
 }
 
 export async function signInWithSupabaseAuth(
@@ -222,7 +446,7 @@ export async function signInWithSupabaseAuth(
     return { ok: false, error: 'Configuração Supabase em falta (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).' };
   }
 
-  const cleanEmail = email.trim().toLowerCase();
+  const cleanEmail = email.replace(/\s+/g, '').trim().toLowerCase();
   if (!cleanEmail || !cleanEmail.includes('@')) {
     return { ok: false, error: 'Introduza um endereço de e-mail válido.' };
   }
@@ -230,19 +454,24 @@ export async function signInWithSupabaseAuth(
     return { ok: false, error: 'Introduza a sua palavra-passe.' };
   }
 
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: cleanEmail,
-    password,
-  });
+  manualAuthFlowDepth++;
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password,
+    });
 
-  if (error || !data?.user) {
-    return {
-      ok: false,
-      error: translateSupabaseAuthError(error?.message),
-    };
+    if (error || !data?.user) {
+      return {
+        ok: false,
+        error: translateSupabaseAuthError(error?.message),
+      };
+    }
+
+    return await validateAuthenticatedUser(data.user);
+  } finally {
+    manualAuthFlowDepth--;
   }
-
-  return validateAuthenticatedUser(data.user);
 }
 
 export async function signUpWithSupabaseAuth(input: {
@@ -262,7 +491,6 @@ export async function signUpWithSupabaseAuth(input: {
     return { ok: false, error: 'Configuração Supabase em falta (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).' };
   }
 
-  const cleanEmail = input.email.trim().toLowerCase();
   const cleanName = input.name.trim();
   const cleanCompanyName = input.companyName.trim();
   const cleanPhone = (input.phone || '').trim();
@@ -271,34 +499,138 @@ export async function signUpWithSupabaseAuth(input: {
 
   if (!cleanName) return { ok: false, error: 'Informe o seu nome completo.' };
   if (!cleanCompanyName) return { ok: false, error: 'Informe o nome da sua empresa.' };
-  if (!cleanEmail || !cleanEmail.includes('@')) {
-    return { ok: false, error: 'Introduza um endereço de e-mail válido.' };
+
+  const emailCheck = sanitizeAndValidateEmail(input.email);
+  if (!emailCheck.ok) {
+    return { ok: false, error: emailCheck.error };
   }
+  const cleanEmail = emailCheck.email;
+
   if (!input.password || input.password.length < 6) {
     return { ok: false, error: 'A palavra-passe deve ter pelo menos 6 caracteres.' };
   }
 
-  const emailRedirectTo = typeof window !== 'undefined' ? window.location.origin : undefined;
+  manualAuthFlowDepth++;
+  try {
+    // Pré-verificação: evitar criar conta órfã no Supabase Auth se as tabelas ou colunas ainda estiverem incompletas
+    try {
+      const { error: tblErr } = await supabase.from('company_settings').select('id').limit(1);
+      if (tblErr) {
+        const msgLower = String(tblErr.message || '').toLowerCase();
+        const code = String(tblErr.code || '').toUpperCase();
+        const isMissingColumnOrMismatch =
+          code === '42703' ||
+          code === '42P13' ||
+          code === '42883' ||
+          code === '42804' ||
+          /column\s+.+\s+does not exist/i.test(msgLower) ||
+          msgLower.includes('return type mismatch');
+        const isMissingTable =
+          !isMissingColumnOrMismatch &&
+          (code === 'PGRST205' ||
+            code === '42P01' ||
+            msgLower.includes('schema cache') ||
+            msgLower.includes('could not find the table') ||
+            /relation\s+["']?[^"']+["']?\s+does not exist/i.test(msgLower));
 
-  const { data, error } = await supabase.auth.signUp({
-    email: cleanEmail,
-    password: input.password,
-    options: {
-      emailRedirectTo,
-      data: {
-        name: cleanName,
-        phone: cleanPhone,
-        company_name: cleanCompanyName,
-        nif: cleanNif,
-        branch: cleanBranch,
-        role: 'admin_geral',
-        self_register: true,
+        if (isMissingColumnOrMismatch) {
+          return {
+            ok: false,
+            error: `A estrutura ou função SQL no Supabase precisa de atualização (${tblErr.message}). Clique em "Ver / Copiar SQL" e execute o script supabase-schema.sql atualizado no SQL Editor do Supabase.`,
+          };
+        }
+        if (isMissingTable) {
+          return {
+            ok: false,
+            error:
+              'As tabelas da base de dados ainda não foram criadas no Supabase. Clique em "Ver / Copiar SQL", execute o script supabase-schema.sql no SQL Editor do Supabase e tente registar novamente.',
+          };
+        }
+      }
+    } catch {
+      // Prossegue caso a verificação prévia de rede falhe
+    }
+
+    const emailRedirectTo = typeof window !== 'undefined' ? window.location.origin : undefined;
+
+    const { data, error } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password: input.password,
+      options: {
+        emailRedirectTo,
+        data: {
+          name: cleanName,
+          phone: cleanPhone,
+          company_name: cleanCompanyName,
+          nif: cleanNif,
+          branch: cleanBranch,
+          role: 'admin_geral',
+          self_register: true,
+        },
       },
-    },
-  });
+    });
 
   if (error) {
+    // Se falhar por envio de e-mail / rate limit / signup bloqueado, tenta criação direta no backend caso SUPABASE_SERVICE_ROLE_KEY esteja configurada
+    const errLower = String(error.message || '').toLowerCase();
+    const canTryAdminFallback =
+      errLower.includes('rate limit') ||
+      errLower.includes('confirmation email') ||
+      errLower.includes('signups not allowed') ||
+      errLower.includes('email_address_invalid');
+
+    if (canTryAdminFallback) {
+      try {
+        const srvRes = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: cleanName,
+            email: cleanEmail,
+            password: input.password,
+            phone: cleanPhone,
+            companyName: cleanCompanyName,
+            nif: cleanNif,
+            branch: cleanBranch,
+          }),
+        });
+        const srvJson = await srvRes.json().catch(() => null);
+        if (srvRes.ok && srvJson?.success && srvJson?.user) {
+          await supabase.auth.signInWithPassword({ email: cleanEmail, password: input.password }).catch(() => {});
+          const mappedCompany = srvJson.company ? mapCompanyFromSupabase(srvJson.company) : undefined;
+          return {
+            ok: true,
+            needsEmailConfirmation: false,
+            user: {
+              id: srvJson.user.id,
+              name: srvJson.user.name,
+              email: srvJson.user.email,
+              phone: srvJson.user.phone || '',
+              role: srvJson.user.role,
+              branch: srvJson.user.branch,
+              companyId: srvJson.user.companyId,
+              sellerId: srvJson.user.sellerId || srvJson.user.id,
+              isActive: srvJson.user.isActive !== false,
+            },
+            company: mappedCompany,
+          };
+        }
+      } catch {
+        // Prossegue para devolver a mensagem traduzida original do Supabase Auth
+      }
+    }
+
     return { ok: false, error: translateSupabaseAuthError(error.message) };
+  }
+
+  if (
+    !data?.user ||
+    (Array.isArray(data.user.identities) && data.user.identities.length === 0)
+  ) {
+    return {
+      ok: false,
+      error: 'Este endereço de e-mail já está registado no Supabase Auth. Inicie sessão ou recupere a palavra-passe.',
+    };
   }
 
   if (!data?.session) {
@@ -306,15 +638,15 @@ export async function signUpWithSupabaseAuth(input: {
       ok: true,
       needsEmailConfirmation: true,
       message:
-        'Conta criada! Enviámos um e-mail de confirmação para ' +
+        'Conta criada no Supabase Auth! Enviámos um e-mail de confirmação para ' +
         cleanEmail +
         '. Confirme o endereço antes de iniciar sessão.',
     };
   }
 
-  // Sessão ativa imediata: garantir onboarding via /api/auth/register caso o trigger DB não tenha corrido
+  // Sessão ativa imediata: garantir onboarding via /api/auth/register (trigger ou RPC complete_company_registration)
   try {
-    await fetch('/api/auth/register', {
+    const regRes = await fetch('/api/auth/register', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -329,8 +661,41 @@ export async function signUpWithSupabaseAuth(input: {
         branch: cleanBranch,
       }),
     });
+
+    const regJson = await regRes.json().catch(() => null);
+    if (!regRes.ok || regJson?.success === false || regJson?.pendingProfileSync) {
+      await supabase.auth.signOut().catch(() => {});
+      return {
+        ok: false,
+        error: translateSupabaseErrorMessage(
+          regJson?.error ||
+            regJson?.message ||
+            'Não foi possível registar a empresa nas tabelas do Supabase. Verifique se executou supabase-schema.sql.'
+        ),
+      };
+    }
+
+    if (regJson?.success && regJson?.user) {
+      const mappedCompany = regJson.company ? mapCompanyFromSupabase(regJson.company) : undefined;
+      return {
+        ok: true,
+        needsEmailConfirmation: false,
+        user: {
+          id: regJson.user.id,
+          name: regJson.user.name,
+          email: regJson.user.email,
+          phone: regJson.user.phone || '',
+          role: regJson.user.role,
+          branch: regJson.user.branch,
+          companyId: regJson.user.companyId,
+          sellerId: regJson.user.sellerId || regJson.user.id,
+          isActive: regJson.user.isActive !== false,
+        },
+        company: mappedCompany,
+      };
+    }
   } catch {
-    // Continua para validar perfil criado pelo trigger
+    // Continua para validar perfil criado pelo trigger ou RPC direta
   }
 
   const validation = await validateAuthenticatedUser(data.user!);
@@ -344,6 +709,9 @@ export async function signUpWithSupabaseAuth(input: {
     user: validation.user,
     company: validation.company,
   };
+  } finally {
+    manualAuthFlowDepth--;
+  }
 }
 
 export async function signOutSupabaseAuth(): Promise<void> {
@@ -417,7 +785,13 @@ export async function createAuthorizedUtilizador(payload: {
   branch: string;
   role: string;
   companyId?: string;
-}): Promise<{ success: boolean; user?: Utilizador; error?: string }> {
+}): Promise<{
+  success: boolean;
+  user?: Utilizador;
+  needsEmailConfirmation?: boolean;
+  message?: string;
+  error?: string;
+}> {
   try {
     const res = await authorizedApiFetch('/api/admin/users', {
       method: 'POST',
@@ -427,7 +801,12 @@ export async function createAuthorizedUtilizador(payload: {
     if (!res.ok || !json.success) {
       return { success: false, error: json.error || 'Erro ao cadastrar utilizador.' };
     }
-    return { success: true, user: json.user };
+    return {
+      success: true,
+      user: json.user,
+      needsEmailConfirmation: Boolean(json.needsEmailConfirmation),
+      message: json.message,
+    };
   } catch (err: any) {
     return { success: false, error: err.message };
   }
@@ -485,6 +864,7 @@ export interface SupabaseHealthResult {
   latencyMs?: number;
   message?: string;
   tableExists?: boolean;
+  schemaUpdateRequired?: boolean;
   counts?: {
     companies: number;
     sellers: number;
@@ -739,6 +1119,7 @@ export async function testSupabaseConnection(): Promise<SupabaseHealthResult> {
         latencyMs: json.latencyMs,
         message: json.message,
         tableExists: json.tableExists,
+        schemaUpdateRequired: Boolean(json.schemaUpdateRequired),
         counts: json.counts,
       };
     }
@@ -1226,7 +1607,7 @@ export async function saveCompanyToSupabase(company: CompanySettings): Promise<{
           return { success: true };
         }
         if ((res.status === 400 || res.status === 401 || res.status === 403) && json?.error) {
-          return { success: false, error: json.error };
+          return { success: false, error: translateSupabaseErrorMessage(json.error) };
         }
       } catch {
         // Fallback direto via Supabase RLS
@@ -1242,14 +1623,14 @@ export async function saveCompanyToSupabase(company: CompanySettings): Promise<{
         delete cleanRow.super_admin_id;
         delete cleanRow.updated_at;
         const { error: retryError } = await supabase.from('company_settings').upsert(cleanRow, { onConflict: 'id' });
-        if (retryError) return { success: false, error: retryError.message };
+        if (retryError) return { success: false, error: translateSupabaseErrorMessage(retryError.message) };
         return { success: true };
       }
-      return { success: false, error: error.message };
+      return { success: false, error: translateSupabaseErrorMessage(error.message) };
     }
     return { success: true };
   } catch (e: any) {
-    return { success: false, error: e.message };
+    return { success: false, error: translateSupabaseErrorMessage(e?.message) };
   }
 }
 
@@ -1267,16 +1648,16 @@ export async function deleteCompanyFromSupabase(companyId: string): Promise<{ su
           return { success: true };
         }
         if ((res.status === 400 || res.status === 401 || res.status === 403) && json?.error) {
-          return { success: false, error: json.error };
+          return { success: false, error: translateSupabaseErrorMessage(json.error) };
         }
       } catch {}
     }
 
     const { error } = await supabase.from('company_settings').delete().eq('id', companyId);
-    if (error) return { success: false, error: error.message };
+    if (error) return { success: false, error: translateSupabaseErrorMessage(error.message) };
     return { success: true };
   } catch (e: any) {
-    return { success: false, error: e.message };
+    return { success: false, error: translateSupabaseErrorMessage(e?.message) };
   }
 }
 
@@ -1302,94 +1683,3 @@ export function subscribeToSupabaseChanges(onDataChange: () => void): () => void
     return () => {};
   }
 }
-
-export async function migrateLocalhostToSupabase(
-  payload: {
-    debts: Debt[];
-    clients: Client[];
-    sellers: Seller[];
-    company: CompanySettings;
-    companies?: CompanySettings[];
-  },
-  credentials?: { email: string; password: string }
-): Promise<{
-  success: boolean;
-  message: string;
-  counts: {
-    companies: number;
-    sellers: number;
-    clients: number;
-    debts: number;
-  };
-}> {
-  const health = await testSupabaseConnection();
-  if (!health.connected) {
-    return {
-      success: false,
-      message: 'Sem ligação ao servidor Supabase. Verifique a sua ligação à internet.',
-      counts: { companies: 0, sellers: 0, clients: 0, debts: 0 },
-    };
-  }
-  if (!health.tableExists) {
-    return {
-      success: false,
-      message: 'As tabelas ainda não existem no Supabase. Execute primeiro o script SQL (supabase-schema.sql) no SQL Editor do Supabase.',
-      counts: { companies: 0, sellers: 0, clients: 0, debts: 0 },
-    };
-  }
-
-  let token = await getSupabaseAccessToken();
-  if (!token) {
-    if (!credentials?.email || !credentials?.password) {
-      return {
-        success: false,
-        message: 'Inicie sessão com a sua conta Supabase Auth abaixo para autorizar a gravação dos dados no Supabase.',
-        counts: { companies: 0, sellers: 0, clients: 0, debts: 0 },
-      };
-    }
-    const authRes = await signInWithSupabaseAuth(credentials.email, credentials.password);
-    if (!authRes.ok) {
-      return {
-        success: false,
-        message: `Falha na autenticação Supabase: ${authRes.error}`,
-        counts: { companies: 0, sellers: 0, clients: 0, debts: 0 },
-      };
-    }
-    token = await getSupabaseAccessToken();
-  }
-
-  const companiesList =
-    Array.isArray(payload.companies) && payload.companies.length > 0
-      ? payload.companies
-      : payload.company
-      ? [payload.company]
-      : [];
-
-  const syncRes = await syncToSupabase({
-    debts: payload.debts || [],
-    clients: payload.clients || [],
-    sellers: payload.sellers || [],
-    company: payload.company,
-    companies: companiesList,
-  });
-
-  if (!syncRes.success) {
-    return {
-      success: false,
-      message: syncRes.message,
-      counts: { companies: 0, sellers: 0, clients: 0, debts: 0 },
-    };
-  }
-
-  return {
-    success: true,
-    message: `Migração concluída! ${companiesList.length} empresa(s), ${(payload.sellers || []).length} vendedor(es), ${(payload.clients || []).length} cliente(s) e ${(payload.debts || []).length} dívida(s) enviados para o Supabase.`,
-    counts: {
-      companies: companiesList.length,
-      sellers: (payload.sellers || []).length,
-      clients: (payload.clients || []).length,
-      debts: (payload.debts || []).length,
-    },
-  };
-}
-

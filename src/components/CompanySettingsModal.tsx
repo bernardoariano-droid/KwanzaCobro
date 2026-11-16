@@ -36,14 +36,13 @@ import {
   syncToSupabase, 
   pullFromSupabase, 
   fetchSupabaseSchemaSql,
-  migrateLocalhostToSupabase,
   SupabaseHealthResult 
 } from '../lib/supabase';
 
 interface CompanySettingsModalProps {
   company: CompanySettings;
   companies?: CompanySettings[];
-  onSaveCompany: (updated: CompanySettings) => void;
+  onSaveCompany: (updated: CompanySettings) => Promise<{ success: boolean; error?: string } | void> | void;
   debts: Debt[];
   clients: Client[];
   sellers: Seller[];
@@ -59,8 +58,6 @@ interface CompanySettingsModalProps {
     companies?: CompanySettings[];
     utilizadores?: Utilizador[];
   }) => void;
-  authMode?: 'localhost' | 'supabase';
-  onMigrationSuccess?: () => void;
 }
 
 export const CompanySettingsView: React.FC<CompanySettingsModalProps> = ({
@@ -75,12 +72,11 @@ export const CompanySettingsView: React.FC<CompanySettingsModalProps> = ({
   allSellers,
   onRestoreDemoData,
   onImportAllData,
-  authMode = 'supabase',
-  onMigrationSuccess,
 }) => {
   const { language, setLanguage, languages, t } = useLanguage();
   const [formData, setFormData] = useState<CompanySettings>(company);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [isCopiedRelationshipSql, setIsCopiedRelationshipSql] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
@@ -98,9 +94,6 @@ export const CompanySettingsView: React.FC<CompanySettingsModalProps> = ({
   const [isTestingSupabase, setIsTestingSupabase] = useState(false);
   const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
   const [isPullingSupabase, setIsPullingSupabase] = useState(false);
-  const [isMigratingToSupabase, setIsMigratingToSupabase] = useState(false);
-  const [migrationEmail, setMigrationEmail] = useState('');
-  const [migrationPassword, setMigrationPassword] = useState('');
   const [supabaseFeedback, setSupabaseFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [schemaSql, setSchemaSql] = useState<string>('');
@@ -371,49 +364,21 @@ CREATE TRIGGER trigger_sync_company_to_snapshot AFTER INSERT OR UPDATE OR DELETE
     setTimeout(() => setIsCopiedSchema(false), 2500);
   };
 
-  const handleMigrateToSupabase = async () => {
-    setIsMigratingToSupabase(true);
-    setSupabaseFeedback(null);
-    try {
-      const res = await migrateLocalhostToSupabase(
-        {
-          debts: allDebts ?? debts,
-          clients: allClients ?? clients,
-          sellers: allSellers ?? sellers,
-          company: formData,
-          companies: companies.length > 0 ? companies : [formData],
-        },
-        migrationEmail && migrationPassword
-          ? { email: migrationEmail, password: migrationPassword }
-          : undefined
-      );
-
-      if (res.success) {
-        setSupabaseFeedback({ type: 'success', message: res.message });
-        if (onMigrationSuccess) {
-          onMigrationSuccess();
-        }
-      } else {
-        setSupabaseFeedback({
-          type: res.message.includes('SQL') ? 'info' : 'error',
-          message: res.message,
-        });
-        if (res.message.includes('SQL')) {
-          setIsSchemaExpanded(true);
-        }
-      }
-    } catch (e: any) {
-      setSupabaseFeedback({ type: 'error', message: e?.message || 'Erro ao migrar dados para o Supabase.' });
-    } finally {
-      setIsMigratingToSupabase(false);
-    }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveCompany(formData);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    setSaveError(null);
+    setSavedSuccess(false);
+    try {
+      const res = await onSaveCompany(formData);
+      if (res && res.success === false) {
+        setSaveError(res.error || 'Não foi possível guardar os dados da empresa no Supabase.');
+        return;
+      }
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Erro ao guardar os dados da empresa.');
+    }
   };
 
   // Exportar Backup JSON
@@ -748,18 +713,24 @@ CREATE TRIGGER trigger_sync_company_to_snapshot AFTER INSERT OR UPDATE OR DELETE
         </div>
 
         {/* Botão de Salvar Alterações */}
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex-1 min-w-[200px]">
             {savedSuccess && (
               <span className="text-xs text-emerald-700 font-bold flex items-center gap-1">
                 <Check className="w-4 h-4" />
                 {t('settings.save_success', 'Configurações gravadas com sucesso!')}
               </span>
             )}
+            {saveError && (
+              <span className="text-xs text-rose-700 font-semibold flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{saveError}</span>
+              </span>
+            )}
           </div>
           <button
             type="submit"
-            className="px-6 py-2.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-sm transition-colors flex items-center gap-2"
+            className="px-6 py-2.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-sm transition-colors flex items-center gap-2 cursor-pointer"
           >
             <Save className="w-4 h-4" />
             <span>{t('settings.save_btn', 'Guardar Alterações da Empresa')}</span>
@@ -955,57 +926,6 @@ CREATE TRIGGER trigger_sync_company_to_snapshot AFTER INSERT OR UPDATE OR DELETE
             <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
           </a>
         </div>
-
-        {/* Painel de Migração Assistida Localhost -> Supabase */}
-        {authMode === 'localhost' && (
-          <div className="p-4 bg-slate-900 text-white rounded-xl space-y-3 border border-slate-800">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <h4 className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
-                  Migração Localhost → Supabase (Quando estiver pronto)
-                </h4>
-                <p className="text-[11px] text-slate-300 mt-0.5">
-                  Os seus dados atuais estão guardados com segurança no Localhost ({companies.length || 1} empresa(s), {(allSellers ?? sellers).length} vendedor(es), {(allClients ?? clients).length} cliente(s), {(allDebts ?? debts).length} dívida(s)). Quando executar o SQL no Supabase, autentique-se abaixo para migrar tudo.
-                </p>
-              </div>
-              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold whitespace-nowrap self-start ${
-                supabaseStatus?.tableExists
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-              }`}>
-                {supabaseStatus?.tableExists ? 'Tabelas Supabase Prontas' : 'Tabelas ainda não criadas'}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              <input
-                type="email"
-                placeholder="E-mail da conta Supabase Auth"
-                value={migrationEmail}
-                onChange={e => setMigrationEmail(e.target.value)}
-                className="px-3 py-2 text-xs text-slate-900 bg-white rounded-lg outline-none focus:ring-2 focus:ring-emerald-400"
-              />
-              <input
-                type="password"
-                placeholder="Palavra-passe Supabase Auth"
-                value={migrationPassword}
-                onChange={e => setMigrationPassword(e.target.value)}
-                className="px-3 py-2 text-xs text-slate-900 bg-white rounded-lg outline-none focus:ring-2 focus:ring-emerald-400"
-              />
-              <button
-                type="button"
-                onClick={handleMigrateToSupabase}
-                disabled={isMigratingToSupabase}
-                className="px-4 py-2 text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer disabled:opacity-60 flex items-center justify-center gap-1.5"
-              >
-                <Cloud className="w-3.5 h-3.5" />
-                <span>{isMigratingToSupabase ? 'A migrar...' : 'Migrar para Supabase'}</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-
 
         {/* ======================================================== */}
         {/* CARD: RELACIONAMENTOS & SINCRONIZAÇÃO KWANZACOBRO_SYNC  */}

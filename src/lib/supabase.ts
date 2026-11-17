@@ -1492,6 +1492,10 @@ export async function saveClientToSupabase(client: Client): Promise<{ success: b
 
 export async function deleteClientFromSupabase(clientId: string): Promise<{ success: boolean; error?: string }> {
   try {
+    const { error: debtsErr } = await supabase.from('debts').delete().eq('client_id', clientId);
+    if (debtsErr) {
+      return { success: false, error: debtsErr.message };
+    }
     const { error } = await supabase.from('clients').delete().eq('id', clientId);
     if (error) return { success: false, error: error.message };
     return { success: true };

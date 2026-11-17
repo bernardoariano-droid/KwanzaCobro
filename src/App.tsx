@@ -70,6 +70,7 @@ import {
   pullFromSupabase, 
   syncToSupabase, 
   saveClientToSupabase, 
+  deleteClientFromSupabase,
   saveDebtToSupabase, 
   savePaymentToSupabase, 
   saveCompanyToSupabase, 
@@ -870,6 +871,42 @@ export default function App() {
     });
   };
 
+  const handleDeleteClient = async (clientId: string): Promise<{ success: boolean; error?: string }> => {
+    if (!isCompanyAdminRole(currentUser?.role)) {
+      return { success: false, error: 'Apenas o Administrador Geral da empresa pode apagar clientes.' };
+    }
+
+    const res = await deleteClientFromSupabase(clientId);
+    if (!res.success) {
+      return { success: false, error: res.error || 'Não foi possível apagar o cliente no Supabase.' };
+    }
+
+    setClients(prev => {
+      const updated = prev.filter(c => c.id !== clientId);
+      try {
+        localStorage.setItem(STORAGE_KEY_CLIENTS, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    setDebts(prev => {
+      const updated = prev.filter(d => d.clientId !== clientId);
+      try {
+        localStorage.setItem(STORAGE_KEY_DEBTS, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    if (debtsClientFilter === clientId) {
+      setDebtsClientFilter('all');
+    }
+
+    setIsSupabaseSynced(true);
+    setLastSyncTime(new Date().toLocaleTimeString('pt-AO'));
+    showAppNotice('success', 'Cliente removido com sucesso.');
+    return { success: true };
+  };
+
   // Bloqueio de Segurança: Restrição estrita por perfil
   useEffect(() => {
     if (!currentUser) return;
@@ -1298,6 +1335,7 @@ export default function App() {
               }}
               onOpenWhatsAppDirect={handleOpenWhatsAppDirect}
               onOpenPayment={d => setSelectedDebtForPayment(d)}
+              onDeleteClient={isCompanyAdminRole(currentUser?.role) ? handleDeleteClient : undefined}
             />
           )}
 

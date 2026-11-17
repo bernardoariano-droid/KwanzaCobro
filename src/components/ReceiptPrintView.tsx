@@ -2,6 +2,7 @@ import React from 'react';
 import { Printer, ArrowLeft, Building2, CheckCircle2 } from 'lucide-react';
 import { Debt, Client, Seller, CompanySettings } from '../types/debt';
 import { formatKwanza, formatDate, getRemainingBalance, getPaidAmount, getEffectiveStatus } from '../utils/formatters';
+import { resolveSystemLogo } from '../data/initialData';
 
 interface ReceiptPrintViewProps {
   debt: Debt;
@@ -54,8 +55,9 @@ export const ReceiptPrintView: React.FC<ReceiptPrintViewProps> = ({
           <div className="space-y-2">
             <div className="p-1 bg-white inline-block border border-slate-200 rounded-lg print:border-none">
               <img 
-                src={company.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'} 
-                alt="NEUROJUS Logomarca" 
+                src={resolveSystemLogo(company.logoUrl)} 
+                alt="KwanzaCobro Logomarca" 
+                referrerPolicy="no-referrer"
                 className="h-12 w-auto max-w-[200px] object-contain"
               />
             </div>

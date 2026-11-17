@@ -27,6 +27,7 @@ import {
 import { useLanguage } from '../i18n/LanguageContext';
 import { LanguageSelector } from './LanguageSelector';
 import { TempSuperAdminPasswordModal } from './TempSuperAdminPasswordModal';
+import { resolveSystemLogo } from '../data/initialData';
 
 interface LoginPageProps {
   company: CompanySettings;
@@ -192,18 +193,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         <div className="bg-white rounded-3xl shadow-2xl border border-emerald-500/20 overflow-hidden">
           {/* Header com Logomarca Oficial em Verde e Branco */}
           <div className="p-6 sm:p-8 bg-gradient-to-b from-emerald-50/80 to-white border-b border-emerald-100 text-center">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-800 text-white font-mono font-black text-2xl shadow-md shadow-emerald-700/20 mb-3 overflow-hidden p-1.5 bg-white border border-emerald-200">
+            <div className="inline-flex items-center justify-center h-20 sm:h-24 px-5 py-2.5 rounded-2xl bg-white border border-emerald-200 shadow-sm mb-3 overflow-hidden max-w-xs sm:max-w-sm mx-auto">
               <img
-                src={company?.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'}
-                alt="KwanzaCobro"
-                className="w-full h-full object-contain"
+                src={resolveSystemLogo(company?.logoUrl)}
+                alt="KwanzaCobro - Gestão Inteligente de Dívidas"
+                referrerPolicy="no-referrer"
+                className="h-full w-auto object-contain"
               />
             </div>
 
-            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900">
-              Kwanza<span className="text-emerald-700">Cobro</span>
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 font-semibold uppercase tracking-wider mt-1">
+            <h1 className="sr-only">KwanzaCobro · Gestão Inteligente de Dívidas</h1>
+            <p className="text-xs sm:text-sm text-slate-600 font-semibold uppercase tracking-wider mt-1">
               {t('app.slogan', 'Gestão e Controlo de Dívidas Empresariais')}
             </p>
             <p className="text-[11px] sm:text-xs text-emerald-800 font-medium mt-1">

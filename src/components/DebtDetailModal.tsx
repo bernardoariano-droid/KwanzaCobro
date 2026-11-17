@@ -27,6 +27,7 @@ import {
   getDaysDiff 
 } from '../utils/formatters';
 import { useLanguage } from '../i18n/LanguageContext';
+import { resolveSystemLogo } from '../data/initialData';
 
 interface DebtDetailModalProps {
   isOpen: boolean;
@@ -79,11 +80,12 @@ export const DebtDetailModal: React.FC<DebtDetailModalProps> = ({
         {/* Top Header */}
         <div className="px-6 py-4 bg-gradient-to-r from-emerald-900 via-emerald-800 to-indigo-950 text-white flex items-center justify-between border-b border-emerald-500/20">
           <div className="flex items-center gap-3">
-            <div className="h-10 px-2 py-0.5 bg-white border border-slate-200 rounded-xl flex items-center justify-center shrink-0 shadow-xs">
+            <div className="h-10 px-2.5 py-0.5 bg-white border border-slate-200 rounded-xl flex items-center justify-center shrink-0 shadow-xs">
               <img 
-                src={company.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'} 
+                src={resolveSystemLogo(company.logoUrl)} 
                 alt="KwanzaCobro" 
-                className="h-8 w-auto max-w-[120px] object-contain"
+                referrerPolicy="no-referrer"
+                className="h-8 w-auto max-w-[130px] object-contain"
               />
             </div>
             <div>

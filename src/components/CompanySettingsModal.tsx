@@ -28,6 +28,7 @@ import {
 import { CompanySettings, Debt, Client, Seller, Utilizador } from '../types/debt';
 import { useLanguage } from '../i18n/LanguageContext';
 import { SupportedLanguage } from '../i18n/translations';
+import { OFFICIAL_SYSTEM_LOGO, resolveSystemLogo } from '../data/initialData';
 import { 
   SUPABASE_URL, 
   SUPABASE_ANON_KEY, 
@@ -520,8 +521,9 @@ CREATE TRIGGER trigger_sync_company_to_snapshot AFTER INSERT OR UPDATE OR DELETE
             <div className="flex items-center gap-4">
               <div className="p-2 bg-white border border-slate-200 rounded-lg shadow-xs">
                 <img 
-                  src={formData.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'} 
-                  alt="Logomarca da Empresa" 
+                  src={resolveSystemLogo(formData.logoUrl)} 
+                  alt="Logomarca Oficial KwanzaCobro" 
+                  referrerPolicy="no-referrer"
                   className="h-12 w-auto max-w-[200px] object-contain"
                 />
               </div>
@@ -534,10 +536,10 @@ CREATE TRIGGER trigger_sync_company_to_snapshot AFTER INSERT OR UPDATE OR DELETE
             </div>
             <button
               type="button"
-              onClick={() => setFormData({ ...formData, logoUrl: '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg' })}
-              className="text-xs font-semibold px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg transition-colors whitespace-nowrap"
+              onClick={() => setFormData({ ...formData, logoUrl: OFFICIAL_SYSTEM_LOGO })}
+              className="text-xs font-semibold px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
             >
-              {t('settings.restore_logo', 'Restaurar Foto Oficial NEUROJUS')}
+              {t('settings.restore_logo', 'Restaurar Logomarca Oficial KwanzaCobro')}
             </button>
           </div>
 

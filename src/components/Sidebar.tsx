@@ -20,6 +20,7 @@ import {
 import { AuthUser, CompanySettings, isAdminOrSuperRole, isSuperAdminRole } from '../types/debt';
 import { LanguageSelector } from './LanguageSelector';
 import { useLanguage } from '../i18n/LanguageContext';
+import { resolveSystemLogo } from '../data/initialData';
 
 export type ActiveTab = 
   | 'dashboard' 
@@ -143,25 +144,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         fixed top-0 bottom-0 left-0 z-50 w-64 sm:w-72 bg-white border-r border-emerald-100 flex flex-col justify-between transition-transform duration-200 ease-in-out shadow-sm
         ${isMobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
-        {/* Topo da Sidebar: Logomarca KwanzaCobro & Fechar Mobile */}
-        <div className="p-5 border-b border-emerald-100/70 flex items-center justify-between bg-emerald-50/30">
-          <div className="flex items-center gap-3">
-            {/* Logomarca Oficial KwanzaCobro */}
-            <div className="w-10 h-10 rounded-xl bg-white border border-emerald-200 p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden">
-              <img 
-                src={company?.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'} 
-                alt="KwanzaCobro" 
-                className="w-full h-full object-contain"
-              />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-extrabold text-base tracking-tight text-slate-900 leading-none">
-                Kwanza<span className="text-emerald-700">Cobro</span>
-              </span>
-              <span className="text-[10px] text-emerald-800/80 font-semibold uppercase tracking-wider mt-1">
-                {t('app.slogan', 'Gestão de Dívidas')}
-              </span>
-            </div>
+        {/* Topo da Sidebar: Logomarca Oficial KwanzaCobro & Fechar Mobile */}
+        <div className="p-4 border-b border-emerald-100/70 flex items-center justify-between gap-2 bg-emerald-50/30">
+          <div className="h-12 flex-1 max-w-[215px] rounded-xl bg-white border border-emerald-200/80 px-2.5 py-1.5 flex items-center justify-center shadow-xs overflow-hidden">
+            <img
+              src={resolveSystemLogo(company?.logoUrl)}
+              alt="KwanzaCobro - Gestão Inteligente de Dívidas"
+              referrerPolicy="no-referrer"
+              className="h-full w-full object-contain"
+            />
           </div>
 
           <button 

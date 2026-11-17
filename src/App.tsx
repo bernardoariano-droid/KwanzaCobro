@@ -19,6 +19,7 @@ import {
 } from './types/debt';
 import { 
   initialCompanySettings,
+  resolveSystemLogo,
   demoDebts,
   demoClients,
   demoSellers
@@ -176,9 +177,7 @@ export default function App() {
       const saved = localStorage.getItem(STORAGE_KEY_COMPANY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (!parsed.logoUrl) {
-          parsed.logoUrl = '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg';
-        }
+        parsed.logoUrl = resolveSystemLogo(parsed.logoUrl);
         return parsed;
       }
       return initialCompanySettings;

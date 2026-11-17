@@ -33,7 +33,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       iban: compRow.iban,
       expressPhone: compRow.express_phone,
       currency: compRow.currency || 'Kz',
-      logoUrl: compRow.logo_url || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg',
+      logoUrl:
+        !compRow.logo_url || compRow.logo_url === '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'
+          ? '/assets/aistudio/c5818dcf-5149-4498-9986-0f9fcadeef6a_a986430f.png'
+          : compRow.logo_url,
       penaltyPerDayRate: compRow.penalty_per_day_rate ?? 0.1,
       daysBeforeDueAlert: compRow.days_before_due_alert ?? 5,
       autoAlertNotifications: compRow.auto_alert_notifications ?? true,

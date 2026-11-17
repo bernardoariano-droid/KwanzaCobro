@@ -18,6 +18,7 @@ import {
 import { AuthUser, isAdminOrSuperRole, isSuperAdminRole } from '../types/debt';
 import { LanguageSelector } from './LanguageSelector';
 import { useLanguage } from '../i18n/LanguageContext';
+import { OFFICIAL_SYSTEM_LOGO, resolveSystemLogo } from '../data/initialData';
 
 export type ActiveTab = 'dashboard' | 'debts' | 'clients' | 'sellers' | 'settings';
 
@@ -43,8 +44,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   fiveDaysCount = 0,
   onOpen5DayReminders,
   onOpenInstallPWA,
-  companyLogo = '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg',
-  companyName = 'NEUROJUS',
+  companyLogo = OFFICIAL_SYSTEM_LOGO,
+  companyName = 'KwanzaCobro',
   currentUser,
   onLogout,
 }) => {
@@ -66,11 +67,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 className="flex items-center gap-2.5 text-left group transition-transform active:scale-98"
                 title={t('nav.dashboard', 'Painel')}
               >
-                <div className="h-11 sm:h-12 px-2 py-1 bg-white border border-slate-200 rounded-xl shadow-xs flex items-center justify-center overflow-hidden hover:border-teal-500 transition-colors">
+                <div className="h-11 sm:h-12 px-2.5 py-1 bg-white border border-slate-200 rounded-xl shadow-xs flex items-center justify-center overflow-hidden hover:border-emerald-500 transition-colors">
                   <img 
-                    src={companyLogo || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'} 
-                    alt="NEUROJUS Logomarca Oficial" 
-                    className="h-9 sm:h-10 max-w-[120px] sm:max-w-[170px] object-contain"
+                    src={resolveSystemLogo(companyLogo)} 
+                    alt="KwanzaCobro Logomarca Oficial" 
+                    referrerPolicy="no-referrer"
+                    className="h-9 sm:h-10 max-w-[140px] sm:max-w-[180px] object-contain"
                   />
                 </div>
                 <div className="flex flex-col hidden sm:flex">

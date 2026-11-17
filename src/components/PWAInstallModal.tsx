@@ -16,6 +16,7 @@ import {
 import QRCode from 'qrcode';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import { useLanguage } from '../i18n/LanguageContext';
+import { OFFICIAL_SYSTEM_LOGO } from '../data/initialData';
 
 interface PWAInstallModalProps {
   isOpen: boolean;
@@ -66,14 +67,15 @@ export const PWAInstallModal: React.FC<PWAInstallModalProps> = ({ isOpen, onClos
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
       <div className="bg-white rounded-2xl max-w-xl w-full border border-slate-200 shadow-2xl overflow-hidden my-4 flex flex-col">
-        {/* Top Header com Azul Institucional e Logomarca Oficial */}
-        <div className="px-6 py-5 bg-gradient-to-r from-emerald-900 via-emerald-800 to-indigo-950 text-white flex items-center justify-between shrink-0">
+        {/* Top Header com Verde Institucional e Logomarca Oficial */}
+        <div className="px-6 py-5 bg-gradient-to-r from-emerald-950 via-emerald-900 to-slate-900 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-xl bg-white p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden border border-white/20">
+            <div className="h-12 px-2.5 py-1 rounded-xl bg-white flex items-center justify-center shadow-xs shrink-0 overflow-hidden border border-white/20">
               <img 
-                src="/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg" 
+                src={OFFICIAL_SYSTEM_LOGO} 
                 alt="KwanzaCobro" 
-                className="w-full h-full object-contain" 
+                referrerPolicy="no-referrer"
+                className="h-10 w-auto max-w-[145px] object-contain" 
               />
             </div>
             <div>

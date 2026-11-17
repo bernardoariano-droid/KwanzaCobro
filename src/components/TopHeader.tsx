@@ -11,6 +11,7 @@ import { AuthUser, CompanySettings, isAdminOrSuperRole, isSuperAdminRole } from 
 import { ActiveTab } from './Sidebar';
 import { LanguageSelector } from './LanguageSelector';
 import { useLanguage } from '../i18n/LanguageContext';
+import { resolveSystemLogo } from '../data/initialData';
 
 interface TopHeaderProps {
   activeTab: ActiveTab;
@@ -76,17 +77,15 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
           </button>
 
           {/* Logomarca em Mobile */}
-          <div className="flex items-center gap-2 lg:hidden">
-            <div className="w-8 h-8 rounded-lg bg-white border border-emerald-200 p-0.5 flex items-center justify-center overflow-hidden shrink-0">
+          <div className="flex items-center lg:hidden">
+            <div className="h-10 px-2 py-1 rounded-xl bg-white border border-emerald-200 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
               <img
-                src={company?.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'}
+                src={resolveSystemLogo(company?.logoUrl)}
                 alt="KwanzaCobro"
-                className="w-full h-full object-contain"
+                referrerPolicy="no-referrer"
+                className="h-full w-auto max-w-[145px] object-contain"
               />
             </div>
-            <span className="font-bold text-sm text-slate-900 tracking-tight">
-              Kwanza<span className="text-emerald-700">Cobro</span>
-            </span>
           </div>
 
           {/* Breadcrumb e Título do Módulo em Desktop */}

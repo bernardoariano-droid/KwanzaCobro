@@ -3,10 +3,20 @@ import { Client, Seller, Debt, CompanySettings, AuthUser } from '../types/debt';
 export const PRESERVED_SUPER_ADMIN_EMAIL = 'bernardoariano@gmail.com';
 export const PRESERVED_SUPER_ADMIN_UUID = '8b9f3c41-c996-4764-87c2-9d82411584e1';
 
+export const OFFICIAL_SYSTEM_LOGO = '/assets/aistudio/c5818dcf-5149-4498-9986-0f9fcadeef6a_a986430f.png';
+export const LEGACY_DEFAULT_LOGO = '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg';
+
+export function resolveSystemLogo(logoUrl?: string | null): string {
+  if (!logoUrl || logoUrl === LEGACY_DEFAULT_LOGO) {
+    return OFFICIAL_SYSTEM_LOGO;
+  }
+  return logoUrl;
+}
+
 export const initialCompanySettings: CompanySettings = {
   id: 'default_company',
   name: 'KwanzaCobro - Gestão de Dívidas Empresariais',
-  logoUrl: '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg',
+  logoUrl: OFFICIAL_SYSTEM_LOGO,
   nif: '5401928374',
   phone: '+244 923 884 100',
   email: 'contacto@kwanzacobro.ao',

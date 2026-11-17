@@ -19,6 +19,7 @@ import QRCode from 'qrcode';
 import { Debt, Client, Seller, CompanySettings } from '../types/debt';
 import { formatKwanza, formatDate, getRemainingBalance } from '../utils/formatters';
 import { downloadNeurojusCreditProofPDF } from '../utils/pdfGenerator';
+import { resolveSystemLogo } from '../data/initialData';
 
 interface AutomaticReceiptModalProps {
   isOpen: boolean;
@@ -159,8 +160,9 @@ export const AutomaticReceiptModal: React.FC<AutomaticReceiptModalProps> = ({
               <div className="flex items-start gap-4">
                 <div className="p-1.5 bg-white border border-slate-200 rounded-lg shadow-xs shrink-0">
                   <img 
-                    src={company.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'} 
-                    alt="NEUROJUS Logomarca" 
+                    src={resolveSystemLogo(company.logoUrl)} 
+                    alt="KwanzaCobro Logomarca" 
+                    referrerPolicy="no-referrer"
                     className="h-12 w-auto max-w-[180px] object-contain"
                   />
                 </div>

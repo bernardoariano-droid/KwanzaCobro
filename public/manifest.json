@@ -3,7 +3,7 @@
   "name": "KwanzaCobro - Gestão e Controlo de Dívidas",
   "short_name": "KwanzaCobro",
   "description": "Sistema oficial KwanzaCobro para controlo de compras a crédito, cobranças automáticas por WhatsApp e SMS e emissão de recibos digitais em Angola.",
-  "theme_color": "#1d4ed8",
+  "theme_color": "#047857",
   "background_color": "#f8fafc",
   "display": "standalone",
   "orientation": "any",
@@ -13,9 +13,9 @@
   "categories": ["business", "finance", "productivity"],
   "icons": [
     {
-      "src": "/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg",
+      "src": "/assets/aistudio/c5818dcf-5149-4498-9986-0f9fcadeef6a_a986430f.png",
       "sizes": "192x192 512x512",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {

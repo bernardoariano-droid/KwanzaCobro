@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  X, 
-  Plus, 
-  Trash2, 
-  Calendar, 
-  AlertTriangle, 
-  Check, 
-  UserPlus, 
-  Receipt, 
-  ShieldCheck, 
+import {
+  X,
+  Plus,
+  Trash2,
+  Calendar,
+  AlertTriangle,
+  Check,
+  UserPlus,
+  Receipt,
   Info,
   Send,
   Smartphone,
@@ -22,10 +21,22 @@ import {
   Store,
   FileCheck2,
   MessageSquare,
-  Sparkles
+  Sparkles,
+  KeyRound,
+  ShieldCheck,
 } from 'lucide-react';
-import { Debt, Client, Seller, DebtItem, PaymentMethod, ConfirmationMode, AuditEntry, CompanySettings, AuthUser } from '../types/debt';
-import { formatKwanza, getRemainingBalance } from '../utils/formatters';
+import {
+  Debt,
+  Client,
+  Seller,
+  DebtItem,
+  ConfirmationMode,
+  AuditEntry,
+  CompanySettings,
+  AuthUser,
+} from '../types/debt';
+import { formatKwanza, formatDate } from '../utils/formatters';
+import { resolveSystemLogo } from '../data/initialData';
 
 interface NewDebtModalProps {
   isOpen: boolean;
@@ -40,13 +51,46 @@ interface NewDebtModalProps {
   onOpenNewClient: () => void;
 }
 
+function addDaysToIso(baseIso: string, days: number): string {
+  const parts = baseIso ? baseIso.split('-').map(Number) : [];
+  const d =
+    parts.length === 3 && !parts.some(Number.isNaN)
+      ? new Date(parts[0], parts[1] - 1, parts[2])
+      : new Date();
+  d.setDate(d.getDate() + days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function getEndOfMonthIso(baseIso: string): string {
+  const parts = baseIso ? baseIso.split('-').map(Number) : [];
+  const base =
+    parts.length === 3 && !parts.some(Number.isNaN)
+      ? new Date(parts[0], parts[1] - 1, parts[2])
+      : new Date();
+  const end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+  const y = end.getFullYear();
+  const m = String(end.getMonth() + 1).padStart(2, '0');
+  const day = String(end.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function getDaysBetweenIso(startIso: string, endIso: string): number | null {
+  if (!startIso || !endIso) return null;
+  const s = new Date(`${startIso}T00:00:00`);
+  const e = new Date(`${endIso}T00:00:00`);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return null;
+  return Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24));
+}
+
 export const NewDebtModal: React.FC<NewDebtModalProps> = ({
   isOpen,
   onClose,
   onSave,
   clients,
   sellers,
-  debts,
   company,
   currentUser,
   initialClientId,
@@ -63,22 +107,24 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('+244 923 000 000');
   const [sellerId, setSellerId] = useState('');
-  const [storeName, setStoreName] = useState(company?.name || 'NEUROJUS Luanda Centro');
+  const [storeName, setStoreName] = useState(company?.name || 'KwanzaCobro Loja Principal');
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [issueDate, setIssueDate] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [paymentMethodAgreed, setPaymentMethodAgreed] = useState<string>('multicaixa_express');
   const [terms, setTerms] = useState('');
   const [autoReminderEnabled, setAutoReminderEnabled] = useState<boolean>(true);
-  const [guaranteeType, setGuaranteeType] = useState('Acordo Verbal');
+  const [guaranteeType, setGuaranteeType] = useState('Confirmação por SMS com Comprovativo Digital');
   const [guarantorName, setGuarantorName] = useState('');
   const [guarantorPhone, setGuarantorPhone] = useState('');
 
-  // Products Table (Section 2 of prompt)
-  const [items, setItems] = useState<Array<{ id: string; description: string; quantity: number; unitPrice: number }>>([
+  // Products Table
+  const [items, setItems] = useState<
+    Array<{ id: string; description: string; quantity: number; unitPrice: number }>
+  >([
     { id: '1', description: 'Arroz 25 kg', quantity: 2, unitPrice: 15000 },
     { id: '2', description: 'Óleo alimentar', quantity: 2, unitPrice: 5000 },
-    { id: '3', description: 'Açúcar 5 kg', quantity: 2, unitPrice: 5000 }
+    { id: '3', description: 'Açúcar 5 kg', quantity: 2, unitPrice: 5000 },
   ]);
 
   // SMS Verification State
@@ -97,13 +143,13 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
   // Code input mode: Modalidade A (Pessoal pelo cliente) vs Modalidade B (Assistida pelo funcionário)
   const [confirmationMode, setConfirmationMode] = useState<ConfirmationMode>('pessoal');
   const [assistedConsentGiven, setAssistedConsentGiven] = useState<boolean>(false);
-  
+
   // 6 digit code input
   const [codeDigits, setCodeDigits] = useState<string[]>(['', '', '', '', '', '']);
   const digitInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Timer & Attempts
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(300); // 5 minutes
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(300);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number>(5);
   const [resendCooldown, setResendCooldown] = useState<number>(0);
   const [isExpired, setIsExpired] = useState<boolean>(false);
@@ -114,15 +160,14 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
     if (isOpen) {
       setCurrentStep(1);
       const today = new Date();
-      setIssueDate(today.toISOString().slice(0, 10));
-
-      // 15 days default payment term
-      const due15 = new Date();
-      due15.setDate(due15.getDate() + 15);
-      setDueDate(due15.toISOString().slice(0, 10));
+      const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
+        today.getDate()
+      ).padStart(2, '0')}`;
+      setIssueDate(todayIso);
+      setDueDate(addDaysToIso(todayIso, 15));
 
       const randomSeq = Math.floor(1000 + Math.random() * 9000);
-      setInvoiceNumber(`FT 2026/${randomSeq}`);
+      setInvoiceNumber(`FT ${today.getFullYear()}/${randomSeq}`);
 
       if (initialClientId) {
         const matchedClient = clients.find(c => c.id === initialClientId);
@@ -158,6 +203,8 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
       setGeneratedCode('');
       setWhatsappSentStatus(false);
       setErrorMessage(null);
+      setWarningMessage(null);
+      setAssistedConsentGiven(false);
       setCodeDigits(['', '', '', '', '', '']);
       setSecondsRemaining(300);
       setAttemptsRemaining(5);
@@ -207,15 +254,11 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
 
   // Quick due date helpers
   const handleQuickDueDate = (days: number) => {
-    const base = issueDate ? new Date(issueDate) : new Date();
-    base.setDate(base.getDate() + days);
-    setDueDate(base.toISOString().slice(0, 10));
+    setDueDate(addDaysToIso(issueDate, days));
   };
 
   const handleEndOfMonth = () => {
-    const base = issueDate ? new Date(issueDate) : new Date();
-    const end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
-    setDueDate(end.toISOString().slice(0, 10));
+    setDueDate(getEndOfMonthIso(issueDate));
   };
 
   // Items table calculations
@@ -238,8 +281,14 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
   const totalCalculated = items.reduce((sum, item) => {
     const q = Number(item.quantity) || 0;
     const p = Number(item.unitPrice) || 0;
-    return sum + (q * p);
+    return sum + q * p;
   }, 0);
+
+  const termDays = getDaysBetweenIso(issueDate, dueDate);
+  const due7 = addDaysToIso(issueDate, 7);
+  const due15 = addDaysToIso(issueDate, 15);
+  const due30 = addDaysToIso(issueDate, 30);
+  const dueEom = getEndOfMonthIso(issueDate);
 
   // Masked phone formatting for quick preview (e.g., +244 923 ••• •20)
   const getLocalMaskedPhone = (phone: string) => {
@@ -333,7 +382,6 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
       }
 
       setCurrentStep(3);
-      // Auto-focus first digit input after entering step 3
       setTimeout(() => {
         digitInputRefs.current[0]?.focus();
       }, 150);
@@ -374,7 +422,9 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
           }),
         });
         const data = await resp.json();
-        codeToUse = String(data.verificationCode || data.sandboxTestCode || Math.floor(100000 + Math.random() * 900000));
+        codeToUse = String(
+          data.verificationCode || data.sandboxTestCode || Math.floor(100000 + Math.random() * 900000)
+        );
         setSessionId(data.sessionId);
         setMaskedPhone(data.maskedPhone || getLocalMaskedPhone(customerPhone));
         setGeneratedCode(codeToUse);
@@ -391,16 +441,20 @@ export const NewDebtModal: React.FC<NewDebtModalProps> = ({
     }
 
     const sellerNameObj = sellers.find(s => s.id === sellerId)?.name || 'Vendedor Comercial';
-    const store = storeName || company?.name || 'NEUROJUS';
+    const store = storeName || company?.name || 'KwanzaCobro';
     const totalFmt = formatKwanza(totalCalculated);
-    const invoiceNum = invoiceNumber.trim() || 'FT 2026';
+    const invoiceNum = invoiceNumber.trim() || `FT ${new Date().getFullYear()}`;
 
     const itemsSummary = items
-      .map(it => `• ${it.description || 'Produto'} (${it.quantity} un) - ${formatKwanza((Number(it.quantity) || 1) * (Number(it.unitPrice) || 0))}`)
+      .map(
+        it =>
+          `• ${it.description || 'Produto'} (${it.quantity} un) - ${formatKwanza(
+            (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0)
+          )}`
+      )
       .join('\n');
 
-    const message = 
-`*NEUROJUS · CONFIRMAÇÃO DE COMPRA A CRÉDITO*
+    const message = `*KWANZACOBRO · CONFIRMAÇÃO DE COMPRA A CRÉDITO*
 Olá, *${customerName.trim()}*!
 
 Foi registada uma compra a crédito na loja *${store}* com o funcionário *${sellerNameObj}*.
@@ -410,12 +464,12 @@ Foi registada uma compra a crédito na loja *${store}* com o funcionário *${sel
 📄 *Fatura:* ${invoiceNum}
 
 🔐 *O SEU CÓDIGO DE CONFIRMAÇÃO É:* *${codeToUse}*
-_Este código consta oficialmente no seu Recibo da NEUROJUS para reconhecimento da dívida._
+_Este código consta oficialmente no seu Recibo da KwanzaCobro para reconhecimento da dívida._
 
 📦 *Produtos Adquiridos:*
 ${itemsSummary}
 
-*NEUROJUS Angola* · Rigor, Excelência e Inovação`;
+*KwanzaCobro* · Gestão Inteligente de Dívidas`;
 
     let cleanPhone = customerPhone.replace(/[\s\-\(\)\.]/g, '').replace(/^\+/, '');
     if (cleanPhone.length === 9 && (cleanPhone.startsWith('9') || cleanPhone.startsWith('2'))) {
@@ -483,7 +537,6 @@ ${itemsSummary}
     newDigits[index] = char;
     setCodeDigits(newDigits);
 
-    // Auto-focus next input
     if (char && index < 5) {
       digitInputRefs.current[index + 1]?.focus();
     }
@@ -518,7 +571,9 @@ ${itemsSummary}
     }
 
     if (confirmationMode === 'assistida' && !assistedConsentGiven) {
-      setErrorMessage('Na modalidade assistida, é obrigatório confirmar que o cliente autorizou a introdução do código.');
+      setErrorMessage(
+        'Na modalidade assistida, é obrigatório confirmar que o cliente autorizou a introdução do código.'
+      );
       return;
     }
 
@@ -556,7 +611,6 @@ ${itemsSummary}
         throw new Error(data.error || 'Código de confirmação incorreto.');
       }
 
-      // Successful verification! Assemble debt object with full audit trail and signatures
       const debtItems: DebtItem[] = items.map(item => ({
         id: item.id,
         description: item.description.trim() || 'Mercadoria Comercial a Crédito',
@@ -570,14 +624,17 @@ ${itemsSummary}
           timestamp: new Date().toISOString(),
           action: 'Operação iniciada e código SMS gerado',
           performedBy: sellers.find(s => s.id === sellerId)?.name || 'Vendedor',
-          details: `Código enviado para o número ${maskedPhone} da loja ${storeName}`
+          details: `Código enviado para o número ${maskedPhone} da loja ${storeName}`,
         },
         {
           timestamp: data.confirmedAt || new Date().toISOString(),
           action: 'Dívida formalmente confirmada pelo cliente',
-          performedBy: confirmationMode === 'pessoal' ? 'Cliente (Pessoal no Ecrã)' : 'Operador (Assistido com Consentimento)',
-          details: `Transação ${data.transactionId} validada por SMS`
-        }
+          performedBy:
+            confirmationMode === 'pessoal'
+              ? 'Cliente (Pessoal no Ecrã)'
+              : 'Operador (Assistido com Consentimento)',
+          details: `Transação ${data.transactionId} validada por SMS`,
+        },
       ];
 
       onSave({
@@ -598,7 +655,6 @@ ${itemsSummary}
         guarantorPhone: guarantorPhone.trim() || undefined,
         autoReminderEnabled,
         reminder5DaysSent: false,
-        // NEUROJUS Confirmation fields
         confirmationStatus: 'confirmada',
         confirmationMode,
         confirmationCode: fullEnteredCode || generatedCode || sandboxCode || undefined,
@@ -621,10 +677,12 @@ ${itemsSummary}
     }
   };
 
-  // Fallback direct registration without SMS (for business continuity if customer has no phone available)
+  // Fallback direct registration without SMS
   const handleDirectRegistrationWithoutSMS = () => {
     if (!customerName.trim() || !dueDate || totalCalculated <= 0) {
-      setErrorMessage('Preencha os dados obrigatórios (cliente, prazo e produtos com valor superior a 0 Kz) antes de gravar.');
+      setErrorMessage(
+        'Preencha os dados obrigatórios (cliente, prazo e produtos com valor superior a 0 Kz) antes de gravar.'
+      );
       return;
     }
 
@@ -662,94 +720,122 @@ ${itemsSummary}
 
   const sellerNameSelected = sellers.find(s => s.id === sellerId)?.name || 'Vendedor Comercial';
 
+  const stepsMeta = [
+    { step: 1 as const, label: 'Cliente & Artigos' },
+    { step: 2 as const, label: 'Conferência & Envio' },
+    { step: 3 as const, label: 'Validação do Código' },
+  ];
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
-      <div className="bg-white rounded-2xl max-w-4xl w-full border border-slate-200 shadow-2xl overflow-hidden my-4 flex flex-col max-h-[92vh]">
-        {/* Top Header */}
-        <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="h-10 px-2 py-0.5 bg-white border border-slate-700 rounded-lg flex items-center justify-center shrink-0">
-              <img 
-                src={company?.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'} 
-                alt="Logomarca Oficial NEUROJUS" 
-                className="h-8 max-w-[130px] sm:max-w-[150px] object-contain"
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+      <div className="bg-white rounded-2xl max-w-4xl w-full border border-emerald-100 shadow-2xl overflow-hidden my-2 sm:my-4 flex flex-col max-h-[94vh]">
+        {/* Top Header com Design do Sistema (Verde Esmeralda + Logomarca Oficial) */}
+        <div className="px-4 sm:px-6 py-4 bg-gradient-to-r from-emerald-950 via-emerald-900 to-slate-900 text-white flex items-center justify-between gap-3 border-b border-emerald-500/20 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-11 px-2.5 py-1 bg-white border border-white/20 rounded-xl flex items-center justify-center shrink-0 shadow-xs overflow-hidden">
+              <img
+                src={resolveSystemLogo(company?.logoUrl)}
+                alt="Logomarca Oficial KwanzaCobro"
+                referrerPolicy="no-referrer"
+                className="h-9 w-auto max-w-[140px] sm:max-w-[155px] object-contain"
               />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold tracking-tight">
-                  NEUROJUS · Registo de Compra a Crédito
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm sm:text-base font-extrabold tracking-tight text-white">
+                  Registo de Compra a Crédito
                 </h2>
-                <span className="text-[11px] font-mono bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded border border-amber-500/30">
-                  Comprovativo Digital & SMS
+                <span className="text-[11px] font-mono font-semibold bg-emerald-500/20 text-emerald-200 px-2 py-0.5 rounded-md border border-emerald-400/30">
+                  {invoiceNumber || 'FT'}
                 </span>
               </div>
-              <p className="text-xs text-slate-300">
-                Registo de produtos, prazo de pagamento, confirmação por SMS e emissão de comprovativo com QR Code
+              <p className="text-[11px] sm:text-xs text-emerald-100/80 truncate mt-0.5">
+                Preencha o cliente, artigos, data limite e confirme por SMS, WhatsApp ou registo direto
               </p>
             </div>
           </div>
+
           <button
+            type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded-md transition-colors"
+            aria-label="Fechar painel"
+            className="text-emerald-200 hover:text-white hover:bg-white/10 p-2 rounded-xl transition-colors cursor-pointer shrink-0 min-h-[40px] min-w-[40px] flex items-center justify-center"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Stepper Progress Bar */}
-        <div className="px-6 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-xs font-semibold shrink-0">
-          <div className="flex items-center gap-2">
-            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-              currentStep === 1 ? 'bg-amber-600 text-white' : currentStep > 1 ? 'bg-emerald-600 text-white' : 'bg-slate-300 text-slate-700'
-            }`}>
-              1
-            </span>
-            <span className={currentStep === 1 ? 'text-slate-900' : 'text-slate-500'}>
-              Produtos & Cliente
-            </span>
-          </div>
+        {/* Stepper Intuitivo e Interativo */}
+        <div className="px-4 sm:px-6 py-3 bg-emerald-50/40 border-b border-emerald-100 flex items-center justify-between gap-2 text-xs shrink-0 overflow-x-auto">
+          {stepsMeta.map((item, idx) => {
+            const isActive = currentStep === item.step;
+            const isCompleted = currentStep > item.step;
+            const canClick = isCompleted;
 
-          <div className="w-8 h-px bg-slate-300"></div>
+            return (
+              <React.Fragment key={item.step}>
+                <button
+                  type="button"
+                  disabled={!canClick}
+                  onClick={() => {
+                    if (canClick) {
+                      setErrorMessage(null);
+                      setCurrentStep(item.step);
+                    }
+                  }}
+                  className={`flex items-center gap-2 whitespace-nowrap rounded-lg px-2 py-1 transition-colors ${
+                    canClick ? 'cursor-pointer hover:bg-emerald-100/70' : 'cursor-default'
+                  }`}
+                >
+                  <span
+                    className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-mono font-bold transition-colors ${
+                      isCompleted
+                        ? 'bg-emerald-600 text-white'
+                        : isActive
+                        ? 'bg-emerald-700 text-white shadow-2xs'
+                        : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {isCompleted ? <Check className="w-3.5 h-3.5" /> : item.step}
+                  </span>
+                  <span
+                    className={`font-semibold ${
+                      isActive
+                        ? 'text-emerald-950 font-bold'
+                        : isCompleted
+                        ? 'text-emerald-800'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    {item.label}
+                  </span>
+                </button>
 
-          <div className="flex items-center gap-2">
-            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-              currentStep === 2 ? 'bg-amber-600 text-white' : currentStep > 2 ? 'bg-emerald-600 text-white' : 'bg-slate-300 text-slate-700'
-            }`}>
-              2
-            </span>
-            <span className={currentStep === 2 ? 'text-slate-900' : 'text-slate-500'}>
-              Conferência & Envio SMS
-            </span>
-          </div>
-
-          <div className="w-8 h-px bg-slate-300"></div>
-
-          <div className="flex items-center gap-2">
-            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-              currentStep === 3 ? 'bg-amber-600 text-white' : 'bg-slate-300 text-slate-700'
-            }`}>
-              3
-            </span>
-            <span className={currentStep === 3 ? 'text-slate-900' : 'text-slate-500'}>
-              Validação do Código
-            </span>
-          </div>
+                {idx < stepsMeta.length - 1 && (
+                  <div
+                    className={`flex-1 min-w-[16px] h-0.5 rounded-full ${
+                      currentStep > item.step ? 'bg-emerald-500' : 'bg-slate-200'
+                    }`}
+                  />
+                )}
+              </React.Fragment>
+            );
+          })}
         </div>
 
         {/* Scrollable Body Content */}
-        <div className="p-6 overflow-y-auto flex-1 space-y-6">
+        <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-5 bg-slate-50/60">
           {errorMessage && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
               <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div>{errorMessage}</div>
+              <div className="font-medium">{errorMessage}</div>
             </div>
           )}
 
           {warningMessage && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
+            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2.5">
               <Info className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-              <div>{warningMessage}</div>
+              <div className="font-medium">{warningMessage}</div>
             </div>
           )}
 
@@ -757,32 +843,84 @@ ${itemsSummary}
           {/* ETAPA 1: REGISTO DE PRODUTOS, CLIENTE, VENDEDOR E PRAZO */}
           {/* ========================================================================= */}
           {currentStep === 1 && (
-            <div className="space-y-6">
-              {/* Secção de Identificação: Cliente e Loja */}
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                    <UserPlus className="w-4 h-4 text-amber-600" />
-                    Identificação do Cliente & Contacto SMS (+244)
+            <div className="space-y-5">
+              {/* Resumo Rápido em Tempo Real (Orientação Intuitiva) */}
+              <div className="bg-white border border-emerald-200/80 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
+                  <div>
+                    <span className="text-slate-500">Cliente: </span>
+                    <strong className="text-slate-900">
+                      {customerName.trim() || 'Por identificar'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Prazo: </span>
+                    <strong
+                      className={
+                        termDays !== null && termDays < 0
+                          ? 'text-rose-700'
+                          : 'text-emerald-800'
+                      }
+                    >
+                      {termDays === null
+                        ? 'Por definir'
+                        : termDays === 0
+                        ? 'Vence hoje'
+                        : termDays > 0
+                        ? `${termDays} ${termDays === 1 ? 'dia' : 'dias'} (${formatDate(dueDate)})`
+                        : `${Math.abs(termDays)} dias em atraso`}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="text-right ml-auto">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-2">
+                    Total
                   </span>
+                  <span
+                    className="text-base font-extrabold font-mono text-emerald-700"
+                    data-tabular
+                  >
+                    {formatKwanza(totalCalculated)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Secção 1: Identificação do Cliente e Loja */}
+              <div className="p-4 sm:p-5 bg-white border border-slate-200 rounded-xl space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                      <UserPlus className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 block">
+                        1. Cliente & Contacto (+244)
+                      </span>
+                      <span className="text-[11px] text-slate-500 block">
+                        Escolha um cliente já registado ou preencha os dados manualmente
+                      </span>
+                    </div>
+                  </div>
                   <button
                     type="button"
                     onClick={onOpenNewClient}
-                    className="text-xs font-semibold text-amber-700 hover:text-amber-800"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer min-h-[36px]"
                   >
-                    + Cadastrar Novo Cliente
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Novo Cliente</span>
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Cliente Registado (opcional)
+                      Cliente Registado (rápido)
                     </label>
                     <select
                       value={clientId}
                       onChange={e => handleSelectClient(e.target.value)}
-                      className="w-full py-2 px-3 text-xs border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                     >
                       <option value="">-- Introduzir manualmente --</option>
                       {clients.map(c => (
@@ -795,7 +933,7 @@ ${itemsSummary}
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Nome Completo do Cliente *
+                      Nome Completo do Cliente <span className="text-rose-600">*</span>
                     </label>
                     <input
                       type="text"
@@ -803,13 +941,13 @@ ${itemsSummary}
                       value={customerName}
                       onChange={e => setCustomerName(e.target.value)}
                       placeholder="Ex: Manuel Domingos da Silva"
-                      className="w-full py-2 px-3 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+                      className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                     />
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Número de Telefone / WhatsApp (+244) *
+                      Telefone / WhatsApp (+244) <span className="text-rose-600">*</span>
                     </label>
                     <input
                       type="text"
@@ -817,16 +955,16 @@ ${itemsSummary}
                       value={customerPhone}
                       onChange={e => setCustomerPhone(e.target.value)}
                       placeholder="+244 923 000 000"
-                      className="w-full py-2 px-3 text-xs border border-slate-300 rounded-lg font-mono focus:ring-2 focus:ring-amber-500"
+                      className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg font-mono bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">
-                      Receberá o SMS de confirmação e alertas prévios aos 5 dias
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      Recebe o código de confirmação e lembretes de prazo
                     </span>
                   </div>
                 </div>
 
                 {/* Loja e Funcionário Responsável */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-3 border-t border-slate-100">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Loja / Estabelecimento Comercial
@@ -837,28 +975,28 @@ ${itemsSummary}
                         type="text"
                         value={storeName}
                         onChange={e => setStoreName(e.target.value)}
-                        placeholder="Ex: NEUROJUS Luanda Centro"
-                        className="w-full pl-8 pr-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+                        placeholder="Ex: KwanzaCobro Luanda Centro"
+                        className="w-full pl-8 pr-3 py-2 text-xs border border-slate-200 rounded-lg bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                       />
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Funcionário / Vendedor Responsável *
+                      Vendedor / Operador Responsável <span className="text-rose-600">*</span>
                     </label>
                     {currentUser?.role === 'vendedor' ? (
-                      <div className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg bg-slate-50 text-slate-800 font-semibold flex items-center justify-between">
+                      <div className="w-full py-2 px-3 text-xs border border-emerald-200 rounded-lg bg-emerald-50/60 text-emerald-950 font-semibold flex items-center justify-between min-h-[40px]">
                         <span>{sellers.find(s => s.id === sellerId)?.name || currentUser.name}</span>
-                        <span className="text-[10px] text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md font-mono">
-                          Bloqueado (Sua Sessão)
+                        <span className="text-[10px] text-emerald-800 bg-white border border-emerald-200 px-2 py-0.5 rounded font-mono">
+                          Sessão Atual
                         </span>
                       </div>
                     ) : (
                       <select
                         value={sellerId}
                         onChange={e => setSellerId(e.target.value)}
-                        className="w-full py-2 px-3 text-xs border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-amber-500"
+                        className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                       >
                         {sellers.length === 0 ? (
                           <option value={currentUser?.id || 'usr-admin-1'}>
@@ -878,55 +1016,61 @@ ${itemsSummary}
               </div>
 
               {/* Secção 2: Discriminação Detalhada dos Produtos Adquiridos */}
-              <div className="p-4 bg-white border border-slate-200 rounded-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                      <Receipt className="w-4 h-4 text-amber-600" />
-                      Discriminação dos Produtos Adquiridos a Crédito
-                    </span>
-                    <p className="text-[11px] text-slate-500">
-                      Adicione todos os artigos da compra. Subtotais e total são calculados automaticamente.
-                    </p>
+              <div className="p-4 sm:p-5 bg-white border border-slate-200 rounded-xl space-y-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                      <Receipt className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 block">
+                        2. Produtos ou Serviços a Crédito
+                      </span>
+                      <p className="text-[11px] text-slate-500">
+                        Os subtotais e o valor global em Kwanzas atualizam automaticamente.
+                      </p>
+                    </div>
                   </div>
 
                   <button
                     type="button"
                     onClick={addItemRow}
-                    className="inline-flex items-center gap-1 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-3 py-1.5 rounded-lg transition-colors"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer min-h-[36px]"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Adicionar Produto</span>
                   </button>
                 </div>
 
-                {/* Tabela de Produtos */}
-                <div className="border border-slate-200 rounded-lg overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-100 font-semibold text-slate-700 border-b border-slate-200">
+                {/* Tabela de Produtos Responsiva */}
+                <div className="border border-slate-200 rounded-xl overflow-x-auto">
+                  <table className="w-full text-xs min-w-[540px]">
+                    <thead className="bg-slate-50 font-semibold text-slate-600 border-b border-slate-200 uppercase tracking-wider text-[11px]">
                       <tr>
-                        <th className="py-2.5 px-3 text-left">Nome ou Descrição do Produto</th>
-                        <th className="py-2.5 px-3 text-center w-24">Quantidade</th>
-                        <th className="py-2.5 px-3 text-right w-36">Preço Unitário (Kz)</th>
+                        <th className="py-2.5 px-3 text-left">Descrição do Produto</th>
+                        <th className="py-2.5 px-3 text-center w-24">Qtd</th>
+                        <th className="py-2.5 px-3 text-right w-36">Preço Unit. (Kz)</th>
                         <th className="py-2.5 px-3 text-right w-36">Subtotal</th>
                         <th className="py-2.5 px-2 text-center w-10"></th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100">
+                    <tbody className="divide-y divide-slate-100 bg-white">
                       {items.map((item, index) => {
                         const q = Number(item.quantity) || 0;
                         const p = Number(item.unitPrice) || 0;
                         const subtotal = q * p;
 
                         return (
-                          <tr key={item.id} className="hover:bg-slate-50">
+                          <tr key={item.id} className="hover:bg-emerald-50/20 transition-colors">
                             <td className="p-2">
                               <input
                                 type="text"
                                 placeholder="Ex: Arroz 25 kg, Óleo alimentar..."
                                 value={item.description}
-                                onChange={e => handleItemChange(index, 'description', e.target.value)}
-                                className="w-full py-1.5 px-2 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-amber-500"
+                                onChange={e =>
+                                  handleItemChange(index, 'description', e.target.value)
+                                }
+                                className="w-full py-2 px-2.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 focus:border-emerald-600"
                               />
                             </td>
                             <td className="p-2">
@@ -935,8 +1079,10 @@ ${itemsSummary}
                                 min="0.01"
                                 step="any"
                                 value={item.quantity}
-                                onChange={e => handleItemChange(index, 'quantity', e.target.value)}
-                                className="w-full py-1.5 px-2 text-xs text-center border border-slate-300 rounded font-mono focus:ring-1 focus:ring-amber-500"
+                                onChange={e =>
+                                  handleItemChange(index, 'quantity', e.target.value)
+                                }
+                                className="w-full py-2 px-2 text-xs text-center border border-slate-200 rounded-lg font-mono focus:outline-none focus:ring-1 focus:ring-emerald-600 focus:border-emerald-600"
                               />
                             </td>
                             <td className="p-2">
@@ -946,11 +1092,16 @@ ${itemsSummary}
                                 step="any"
                                 placeholder="0"
                                 value={item.unitPrice || ''}
-                                onChange={e => handleItemChange(index, 'unitPrice', e.target.value)}
-                                className="w-full py-1.5 px-2 text-xs text-right border border-slate-300 rounded font-mono focus:ring-1 focus:ring-amber-500"
+                                onChange={e =>
+                                  handleItemChange(index, 'unitPrice', e.target.value)
+                                }
+                                className="w-full py-2 px-2.5 text-xs text-right border border-slate-200 rounded-lg font-mono focus:outline-none focus:ring-1 focus:ring-emerald-600 focus:border-emerald-600"
                               />
                             </td>
-                            <td className="p-2 text-right font-mono font-bold text-slate-900" data-tabular>
+                            <td
+                              className="p-2 text-right font-mono font-bold text-slate-900 whitespace-nowrap"
+                              data-tabular
+                            >
                               {formatKwanza(subtotal)}
                             </td>
                             <td className="p-2 text-center">
@@ -958,7 +1109,7 @@ ${itemsSummary}
                                 <button
                                   type="button"
                                   onClick={() => removeItemRow(index)}
-                                  className="text-slate-400 hover:text-rose-600 transition-colors p-1"
+                                  className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors p-1.5 rounded-lg cursor-pointer"
                                   title="Remover linha"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -972,19 +1123,26 @@ ${itemsSummary}
                   </table>
                 </div>
 
-                {/* Bloco de Total Dinâmico em Kz */}
-                <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-3 flex items-center justify-between">
-                  <div className="text-xs text-slate-700">
-                    <span className="font-semibold">{items.length} {items.length === 1 ? 'produto registado' : 'produtos registados'}</span>
-                    <span className="text-slate-400 mx-2">·</span>
-                    <span className="text-[11px] text-slate-500">Subtotal = Quantidade × Preço unitário</span>
+                {/* Bloco de Total Dinâmico em Kz (Tema Sistema Esmeralda) */}
+                <div className="bg-gradient-to-r from-emerald-950 to-slate-900 text-white rounded-xl px-4 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs text-emerald-100/90">
+                    <span className="font-bold text-white">
+                      {items.length} {items.length === 1 ? 'artigo' : 'artigos'}
+                    </span>
+                    <span className="text-emerald-400/60 mx-2">·</span>
+                    <span className="text-[11px] text-emerald-200/80">
+                      Cálculo: Quantidade × Preço unitário
+                    </span>
                   </div>
 
-                  <div className="text-right">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
-                      TOTAL DA DÍVIDA (A CRÉDITO)
+                  <div className="text-right ml-auto">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300 block">
+                      Total da Dívida (A Crédito)
                     </span>
-                    <span className="text-lg font-black font-mono text-slate-900" data-tabular>
+                    <span
+                      className="text-xl font-black font-mono text-white"
+                      data-tabular
+                    >
                       {formatKwanza(totalCalculated)}
                     </span>
                   </div>
@@ -992,11 +1150,20 @@ ${itemsSummary}
               </div>
 
               {/* Secção 3: Prazos e Condições Contratuais */}
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4">
-                <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                  <Calendar className="w-4 h-4 text-rose-600" />
-                  Data Limite de Pagamento & Prazos
-                </span>
+              <div className="p-4 sm:p-5 bg-white border border-slate-200 rounded-xl space-y-4">
+                <div className="flex items-center gap-2 pb-2.5 border-b border-slate-100">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                    <Calendar className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-slate-900 block">
+                      3. Prazo de Pagamento, Alerta & Condições
+                    </span>
+                    <span className="text-[11px] text-slate-500 block">
+                      Escolha a data limite rapidamente com os atalhos ou personalize no calendário
+                    </span>
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -1007,77 +1174,93 @@ ${itemsSummary}
                       type="date"
                       value={issueDate}
                       onChange={e => setIssueDate(e.target.value)}
-                      className="w-full py-2 px-3 text-xs border border-slate-300 rounded-lg font-mono focus:ring-2 focus:ring-amber-500"
+                      className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg font-mono bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-rose-800 mb-1 flex items-center justify-between">
-                      <span>DATA LIMITE DE PAGAMENTO (PRAZO) *</span>
-                      <span className="text-[10px] font-normal text-slate-500">Obrigatório</span>
+                    <label className="block text-xs font-bold text-slate-900 mb-1 flex items-center justify-between">
+                      <span>
+                        Data Limite de Pagamento (Prazo) <span className="text-rose-600">*</span>
+                      </span>
+                      {termDays !== null && (
+                        <span
+                          className={`text-[11px] font-mono font-semibold ${
+                            termDays < 0 ? 'text-rose-700' : 'text-emerald-700'
+                          }`}
+                        >
+                          {termDays === 0
+                            ? 'Hoje'
+                            : termDays > 0
+                            ? `+${termDays} dias`
+                            : `${termDays} dias`}
+                        </span>
+                      )}
                     </label>
                     <input
                       type="date"
                       required
                       value={dueDate}
                       onChange={e => setDueDate(e.target.value)}
-                      className="w-full py-2 px-3 text-xs border-2 border-rose-300 bg-white rounded-lg font-mono font-bold text-rose-900 focus:ring-2 focus:ring-rose-500"
+                      className="w-full py-2 px-3 text-xs border border-emerald-300 bg-white rounded-lg font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                     />
-                    {/* Atalhos Rápidos de Prazo */}
-                    <div className="flex items-center gap-1.5 mt-2">
-                      <span className="text-[10px] text-slate-500">Atalhos:</span>
-                      <button
-                        type="button"
-                        onClick={() => handleQuickDueDate(7)}
-                        className="px-2 py-0.5 text-[10px] font-semibold bg-white border border-slate-300 hover:bg-slate-100 rounded"
-                      >
-                        +7 dias
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleQuickDueDate(15)}
-                        className="px-2 py-0.5 text-[10px] font-semibold bg-white border border-slate-300 hover:bg-slate-100 rounded"
-                      >
-                        +15 dias
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleQuickDueDate(30)}
-                        className="px-2 py-0.5 text-[10px] font-semibold bg-white border border-slate-300 hover:bg-slate-100 rounded"
-                      >
-                        +30 dias
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleEndOfMonth}
-                        className="px-2 py-0.5 text-[10px] font-semibold bg-white border border-slate-300 hover:bg-slate-100 rounded"
-                      >
-                        Fim do mês
-                      </button>
+                    {/* Atalhos Rápidos de Prazo com Destaque Ativo */}
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                      <span className="text-[11px] text-slate-500 mr-0.5">Atalhos:</span>
+                      {[
+                        { label: '+7 dias', target: due7, onClick: () => handleQuickDueDate(7) },
+                        { label: '+15 dias', target: due15, onClick: () => handleQuickDueDate(15) },
+                        { label: '+30 dias', target: due30, onClick: () => handleQuickDueDate(30) },
+                        { label: 'Fim do mês', target: dueEom, onClick: handleEndOfMonth },
+                      ].map(shortcut => {
+                        const active = dueDate === shortcut.target;
+                        return (
+                          <button
+                            key={shortcut.label}
+                            type="button"
+                            onClick={shortcut.onClick}
+                            className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition-colors cursor-pointer min-h-[30px] ${
+                              active
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-900'
+                            }`}
+                          >
+                            {shortcut.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
 
                 {/* Alerta de 5 dias preventivo */}
-                <div className="p-3 bg-white border border-slate-200 rounded-lg flex items-center justify-between">
+                <label
+                  htmlFor="autoReminderToggle"
+                  className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                    autoReminderEnabled
+                      ? 'bg-emerald-50/50 border-emerald-300'
+                      : 'bg-slate-50 border-slate-200 hover:bg-slate-100/70'
+                  }`}
+                >
                   <div>
-                    <span className="text-xs font-semibold text-slate-900 block">
-                      Alerta Preventivo Automático aos 5 Dias
+                    <span className="text-xs font-bold text-slate-900 block">
+                      Alerta Preventivo Automático (5 dias antes)
                     </span>
-                    <p className="text-[11px] text-slate-500">
-                      O sistema emitirá notificação no WhatsApp / SMS para o número {customerPhone} exatamente 5 dias antes da data limite.
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      Notifica o cliente por WhatsApp / SMS ({customerPhone}) exatamente 5 dias antes do vencimento.
                     </p>
                   </div>
                   <input
+                    id="autoReminderToggle"
                     type="checkbox"
                     checked={autoReminderEnabled}
                     onChange={e => setAutoReminderEnabled(e.target.checked)}
-                    className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500"
+                    className="w-4 h-4 accent-emerald-600 rounded cursor-pointer shrink-0"
                   />
-                </div>
+                </label>
 
-                {/* Método e Garantia */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                {/* Método, Garantia e Observações */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Método de Pagamento Acordado
@@ -1085,7 +1268,7 @@ ${itemsSummary}
                     <select
                       value={paymentMethodAgreed}
                       onChange={e => setPaymentMethodAgreed(e.target.value)}
-                      className="w-full py-2 px-3 text-xs border border-slate-300 rounded-lg bg-white"
+                      className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                     >
                       <option value="multicaixa_express">Multicaixa Express</option>
                       <option value="transferencia_bancaria">Transferência Bancária (IBAN)</option>
@@ -1101,7 +1284,7 @@ ${itemsSummary}
                     <select
                       value={guaranteeType}
                       onChange={e => setGuaranteeType(e.target.value)}
-                      className="w-full py-2 px-3 text-xs border border-slate-300 rounded-lg bg-white"
+                      className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[40px]"
                     >
                       <option value="Confirmação por SMS com Comprovativo Digital">
                         Confirmação por SMS com Comprovativo Digital (Recomendado)
@@ -1112,6 +1295,48 @@ ${itemsSummary}
                     </select>
                   </div>
                 </div>
+
+                {guaranteeType === 'Fiador Pessoal' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 p-3.5 bg-emerald-50/40 border border-emerald-200 rounded-xl">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Nome do Fiador (opcional)
+                      </label>
+                      <input
+                        type="text"
+                        value={guarantorName}
+                        onChange={e => setGuarantorName(e.target.value)}
+                        placeholder="Nome completo do fiador"
+                        className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 min-h-[38px]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Telefone do Fiador (opcional)
+                      </label>
+                      <input
+                        type="text"
+                        value={guarantorPhone}
+                        onChange={e => setGuarantorPhone(e.target.value)}
+                        placeholder="+244 923 000 000"
+                        className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg font-mono bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 min-h-[38px]"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Observações / Condições Adicionais (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={terms}
+                    onChange={e => setTerms(e.target.value)}
+                    placeholder="Ex: Pagamento em 2 prestações ou entrega no armazém..."
+                    className="w-full py-2 px-3 text-xs border border-slate-200 rounded-lg bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 min-h-[38px]"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -1120,65 +1345,66 @@ ${itemsSummary}
           {/* ETAPA 2: CONFERÊNCIA DA COMPRA PELO CLIENTE & ENVIO DE CÓDIGO SMS */}
           {/* ========================================================================= */}
           {currentStep === 2 && (
-            <div className="space-y-6">
-              {/* Ecrã de Conferência Oficial ao Cliente */}
-              <div className="bg-slate-50 border-2 border-slate-300 rounded-2xl p-6 space-y-5">
-                <div className="flex flex-col sm:flex-row items-center justify-between border-b border-slate-200 pb-4 gap-3 text-center sm:text-left">
-                  <div className="flex items-center gap-3">
-                    <div className="p-1 bg-white border border-slate-200 rounded-lg shadow-xs shrink-0">
-                      <img 
-                        src={company?.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg'} 
-                        alt="Logomarca Oficial NEUROJUS" 
-                        className="h-10 max-w-[170px] object-contain"
+            <div className="space-y-5">
+              {/* Cartão de Conferência Oficial */}
+              <div className="bg-white border border-emerald-200 rounded-2xl p-5 sm:p-6 space-y-5 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 pb-4 gap-3 text-center sm:text-left">
+                  <div className="flex flex-col sm:flex-row items-center gap-3">
+                    <div className="p-1.5 bg-white border border-emerald-200 rounded-xl shadow-2xs shrink-0">
+                      <img
+                        src={resolveSystemLogo(company?.logoUrl)}
+                        alt="Logomarca Oficial KwanzaCobro"
+                        referrerPolicy="no-referrer"
+                        className="h-10 max-w-[175px] object-contain"
                       />
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-teal-800 block">
-                        Sistema NEUROJUS Angola
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-700 block">
+                        {company?.name || 'KwanzaCobro Angola'}
                       </span>
                       <h3 className="text-base sm:text-lg font-black text-slate-900 mt-0.5">
-                        CONFIRMAÇÃO DE COMPRA A CRÉDITO
+                        Conferência da Compra a Crédito
                       </h3>
                     </div>
                   </div>
                   <div className="text-xs text-slate-500 sm:text-right">
-                    <span>Apresente este ecrã ao cliente para validação antes do envio por SMS</span>
+                    <span>Mostre este resumo ao cliente antes de emitir ou enviar o código</span>
                   </div>
                 </div>
 
                 {/* Dados da Operação */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs">
                   <div>
-                    <span className="text-slate-500 block">Nome do Cliente:</span>
-                    <strong className="text-slate-900 text-sm">{customerName}</strong>
+                    <span className="text-slate-500 block text-[11px]">Cliente:</span>
+                    <strong className="text-slate-900 text-sm block truncate">{customerName}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-500 block">Loja:</span>
-                    <strong className="text-slate-900">{storeName}</strong>
+                    <span className="text-slate-500 block text-[11px]">Loja:</span>
+                    <strong className="text-slate-900 block truncate">{storeName}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-500 block">Data da Operação:</span>
-                    <strong className="text-slate-900">{issueDate}</strong>
+                    <span className="text-slate-500 block text-[11px]">Emissão:</span>
+                    <strong className="text-slate-900 font-mono">{formatDate(issueDate)}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-500 block">Funcionário Responsável:</span>
-                    <strong className="text-slate-900">{sellerNameSelected}</strong>
+                    <span className="text-slate-500 block text-[11px]">Responsável:</span>
+                    <strong className="text-slate-900 block truncate">{sellerNameSelected}</strong>
                   </div>
                 </div>
 
                 {/* Tabela de Produtos para o Cliente */}
                 <div>
                   <span className="text-xs font-bold text-slate-800 block mb-2">
-                    Produtos Adquiridos:
+                    Artigos Discriminados ({items.length})
                   </span>
-                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-100 font-semibold text-slate-700 border-b border-slate-200">
+                  <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+                    <table className="w-full text-xs min-w-[440px]">
+                      <thead className="bg-slate-50 font-semibold text-slate-600 border-b border-slate-200">
                         <tr>
-                          <th className="py-2 px-3 text-left">Produto</th>
-                          <th className="py-2 px-3 text-center w-20">Qtd</th>
-                          <th className="py-2 px-3 text-right w-28">Preço Unitário</th>
-                          <th className="py-2 px-3 text-right w-28">Subtotal</th>
+                          <th className="py-2.5 px-3 text-left">Produto</th>
+                          <th className="py-2.5 px-3 text-center w-20">Qtd</th>
+                          <th className="py-2.5 px-3 text-right w-28">Preço Unit.</th>
+                          <th className="py-2.5 px-3 text-right w-28">Subtotal</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -1187,10 +1413,17 @@ ${itemsSummary}
                           const p = Number(item.unitPrice) || 0;
                           return (
                             <tr key={item.id}>
-                              <td className="py-2 px-3 text-slate-800 font-medium">{item.description}</td>
-                              <td className="py-2 px-3 text-center font-mono">{q}</td>
-                              <td className="py-2 px-3 text-right font-mono">{formatKwanza(p)}</td>
-                              <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">
+                              <td className="py-2.5 px-3 text-slate-800 font-medium">
+                                {item.description || 'Mercadoria Comercial'}
+                              </td>
+                              <td className="py-2.5 px-3 text-center font-mono">{q}</td>
+                              <td className="py-2.5 px-3 text-right font-mono" data-tabular>
+                                {formatKwanza(p)}
+                              </td>
+                              <td
+                                className="py-2.5 px-3 text-right font-mono font-bold text-slate-900"
+                                data-tabular
+                              >
                                 {formatKwanza(q * p)}
                               </td>
                             </tr>
@@ -1201,109 +1434,119 @@ ${itemsSummary}
                   </div>
                 </div>
 
-                {/* Valor Total Destacado */}
-                <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between">
+                {/* Valor Total Destacado (Tema Esmeralda do Sistema) */}
+                <div className="bg-gradient-to-r from-emerald-950 via-emerald-900 to-slate-900 text-white rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <span className="text-xs text-slate-400 block uppercase tracking-wider font-semibold">
-                      VALOR TOTAL DA DÍVIDA
+                    <span className="text-[11px] text-emerald-200 block uppercase tracking-wider font-semibold">
+                      Valor Total da Dívida
                     </span>
-                    <div className="text-2xl font-black font-mono text-amber-400" data-tabular>
+                    <div
+                      className="text-2xl font-black font-mono text-white mt-0.5"
+                      data-tabular
+                    >
                       {formatKwanza(totalCalculated)}
                     </div>
                   </div>
 
-                  <div className="text-right">
-                    <span className="text-xs text-slate-400 block font-semibold">
-                      Prazo Limite:
+                  <div className="text-right ml-auto">
+                    <span className="text-[11px] text-emerald-200 block font-semibold">
+                      Prazo Limite de Pagamento
                     </span>
-                    <span className="text-sm font-bold font-mono text-white">
-                      {dueDate}
+                    <span className="text-sm font-bold font-mono text-emerald-300">
+                      {formatDate(dueDate)}
                     </span>
+                    {termDays !== null && (
+                      <span className="text-[11px] text-emerald-100/80 block">
+                        ({termDays >= 0 ? `${termDays} dias` : `${Math.abs(termDays)}d atraso`})
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                {/* Verificação do Número Parcialmente Oculto */}
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between">
+                {/* Verificação do Número do Cliente */}
+                <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
-                    <Smartphone className="w-5 h-5 text-amber-700" />
+                    <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                      <Smartphone className="w-4 h-4" />
+                    </div>
                     <div>
                       <span className="text-xs font-bold text-slate-900 block">
-                        Destinatário do Código SMS:
+                        Contacto do Cliente (+244)
                       </span>
-                      <span className="text-xs font-mono font-bold text-amber-900">
-                        {maskedPhone}
+                      <span className="text-xs font-mono font-bold text-emerald-900">
+                        {customerPhone} · ({maskedPhone})
                       </span>
                     </div>
                   </div>
 
-                  <span className="text-[11px] text-slate-500">
-                    Confirme com o cliente se este é o número correto (+244)
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentStep(1)}
+                    className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 bg-white border border-emerald-200 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Corrigir Dados
+                  </button>
                 </div>
 
-                {/* Opções de Envio e Confirmação Opcional */}
-                <div className="p-4 bg-white border border-slate-200 rounded-xl space-y-3">
-                  <div className="flex items-center justify-between">
+                {/* Opções de Envio e Confirmação */}
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-bold text-slate-900 block">
-                      Escolha como Deseja Confirmar ou Gravar a Dívida:
+                      Como pretende concluir esta compra a crédito?
                     </span>
-                    <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-medium">
-                      O envio do código é opcional
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      O envio de código é opcional
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    {/* Opção 1: SMS Tradicional */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {/* Opção 1: SMS */}
                     <button
                       type="button"
                       disabled={isSendingSMS}
                       onClick={handleSendConfirmationSMS}
-                      className="p-3 text-left border border-amber-300 hover:border-amber-500 bg-amber-50/60 hover:bg-amber-100/60 rounded-xl transition-all group"
+                      className="p-3.5 text-left border border-emerald-500 hover:border-emerald-700 bg-emerald-50/70 hover:bg-emerald-100/70 rounded-xl transition-all cursor-pointer disabled:opacity-60"
                     >
-                      <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900 mb-0.5">
-                        <Send className="w-3.5 h-3.5 text-amber-700" />
-                        <span>1. Enviar por SMS</span>
+                      <div className="flex items-center gap-1.5 font-bold text-xs text-emerald-950 mb-1">
+                        <Send className="w-4 h-4 text-emerald-700" />
+                        <span>1. Enviar Código por SMS</span>
                       </div>
-                      <p className="text-[11px] text-slate-600">
-                        Dispara SMS com código de 6 dígitos para o terminal do cliente.
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        Gera e envia o código de 6 dígitos para confirmação pelo cliente.
                       </p>
                     </button>
 
-                    {/* Opção 2: WhatsApp Manual */}
+                    {/* Opção 2: WhatsApp */}
                     <button
                       type="button"
                       disabled={isSendingSMS}
                       onClick={handleSendCodeViaWhatsApp}
-                      className="p-3 text-left border border-emerald-300 hover:border-emerald-500 bg-emerald-50/60 hover:bg-emerald-100/60 rounded-xl transition-all group"
+                      className="p-3.5 text-left border border-emerald-200 hover:border-emerald-500 bg-white hover:bg-emerald-50/40 rounded-xl transition-all cursor-pointer disabled:opacity-60"
                     >
-                      <div className="flex items-center gap-1.5 font-bold text-xs text-emerald-900 mb-0.5">
-                        <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
+                      <div className="flex items-center gap-1.5 font-bold text-xs text-emerald-900 mb-1">
+                        <MessageSquare className="w-4 h-4 text-emerald-600" />
                         <span>2. Enviar via WhatsApp</span>
                       </div>
-                      <p className="text-[11px] text-slate-600">
-                        Abre o WhatsApp com o resumo e o mesmo código do recibo.
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        Abre o WhatsApp do cliente com resumo completo e código oficial.
                       </p>
                     </button>
 
-                    {/* Opção 3: Gravação Direta Opcional */}
+                    {/* Opção 3: Gravar sem Código */}
                     <button
                       type="button"
                       onClick={handleDirectRegistrationWithoutSMS}
-                      className="p-3 text-left border border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-slate-100 rounded-xl transition-all"
+                      className="p-3.5 text-left border border-slate-200 hover:border-slate-400 bg-slate-50 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
                     >
-                      <div className="flex items-center gap-1.5 font-bold text-xs text-slate-800 mb-0.5">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-slate-600" />
+                      <div className="flex items-center gap-1.5 font-bold text-xs text-slate-800 mb-1">
+                        <CheckCircle2 className="w-4 h-4 text-slate-600" />
                         <span>3. Gravar sem Código</span>
                       </div>
-                      <p className="text-[11px] text-slate-600">
-                        Grava a dívida diretamente sem exigir envio ou validação prévia.
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        Regista a dívida de imediato caso o cliente esteja sem telemóvel.
                       </p>
                     </button>
                   </div>
-                </div>
-
-                <div className="text-center text-xs text-slate-600 font-medium">
-                  Estado atual: <span className="text-amber-800 font-bold">Aguardando confirmação do cliente ou envio de código</span>
                 </div>
               </div>
             </div>
@@ -1313,25 +1556,25 @@ ${itemsSummary}
           {/* ETAPA 3: INTRODUÇÃO DO CÓDIGO PELO CLIENTE (MODALIDADE A E B) */}
           {/* ========================================================================= */}
           {currentStep === 3 && (
-            <div className="space-y-6">
-              {/* Notificação de Envio Real / Sandbox com o Código no Ecrã */}
-              <div className="p-4 bg-linear-to-r from-amber-500/10 via-emerald-500/10 to-teal-500/10 border-2 border-amber-500/40 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-amber-600 text-white flex items-center justify-center font-mono font-black text-xl shadow-md shrink-0">
-                    🔑
+            <div className="space-y-5">
+              {/* Código Gerado & Ações Rápidas */}
+              <div className="p-4 sm:p-5 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-xl bg-emerald-700 text-white flex items-center justify-center shadow-xs shrink-0">
+                    <KeyRound className="w-6 h-6" />
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-900 bg-amber-200/80 px-2 py-0.5 rounded">
-                        Código no Ecrã & no Recibo Oficial
-                      </span>
-                      <span className="text-xs text-slate-500">Exato mesmo código</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">
+                      Código Gerado para o Comprovativo
+                    </span>
+                    <div
+                      className="text-2xl font-black font-mono tracking-widest text-slate-900 mt-0.5"
+                      data-tabular
+                    >
+                      {generatedCode || sandboxCode || '------'}
                     </div>
-                    <div className="text-2xl font-black font-mono tracking-widest text-slate-900 mt-0.5 flex items-center gap-2">
-                      <span>{generatedCode || sandboxCode || '123456'}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-600">
-                      Este código aparece no ecrã, no recibo impresso/PDF e pode ser enviado por WhatsApp ao cliente (+244).
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      Sincronizado com o recibo em PDF e envio por WhatsApp (+244).
                     </p>
                   </div>
                 </div>
@@ -1340,77 +1583,102 @@ ${itemsSummary}
                   <button
                     type="button"
                     onClick={handleAutofillCode}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors shadow-xs"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-emerald-900 bg-white hover:bg-emerald-100 border border-emerald-300 rounded-xl transition-colors shadow-2xs cursor-pointer min-h-[38px]"
                     title="Preenche automaticamente os 6 dígitos nas caixas abaixo"
                   >
-                    <Sparkles className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Preencher no Ecrã</span>
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Preencher Código</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleSendCodeViaWhatsApp}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shadow-xs"
-                    title="Reenviar ou partilhar este código pelo WhatsApp do cliente"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-2xs cursor-pointer min-h-[38px]"
+                    title="Partilhar este código pelo WhatsApp do cliente"
                   >
                     <MessageSquare className="w-3.5 h-3.5" />
-                    <span>Enviar via WhatsApp</span>
+                    <span>Enviar WhatsApp</span>
                   </button>
                 </div>
               </div>
 
               {/* Informação de entrega */}
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-3">
+              <div className="p-3.5 bg-white border border-slate-200 rounded-xl flex items-start gap-3">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                 <div className="text-xs space-y-0.5 text-slate-700">
                   <div className="font-semibold text-slate-900">
-                    {smsMessage || 'Código gerado com sucesso para esta operação.'}
+                    {smsMessage || 'Código de confirmação ativo para esta operação.'}
                   </div>
                   <div>
-                    Destinatário registado: <strong>{maskedPhone}</strong> (Nome: <strong>{customerName}</strong>)
+                    Destinatário: <strong className="font-mono">{maskedPhone}</strong> · Cliente:{' '}
+                    <strong>{customerName}</strong>
                   </div>
                 </div>
               </div>
 
               {/* Seletor de Modalidade: A (Pessoal) vs B (Assistida) */}
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <label className="text-xs font-bold text-slate-900 block">
-                  Selecione a Modalidade de Introdução do Código:
+                  Modalidade de Introdução do Código:
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={() => setConfirmationMode('pessoal')}
-                    className={`p-3.5 rounded-xl border text-left transition-all ${
+                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
                       confirmationMode === 'pessoal'
-                        ? 'border-amber-600 bg-amber-50/70 shadow-xs'
+                        ? 'border-emerald-600 bg-emerald-50/70 ring-1 ring-emerald-600/20'
                         : 'border-slate-200 bg-white hover:bg-slate-50'
                     }`}
                   >
-                    <div className="flex items-center gap-2 mb-1">
-                      <Smartphone className={`w-4 h-4 ${confirmationMode === 'pessoal' ? 'text-amber-700' : 'text-slate-500'}`} />
-                      <strong className="text-xs text-slate-900">Modalidade A: Introdução Pessoal</strong>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-2">
+                        <Smartphone
+                          className={`w-4 h-4 ${
+                            confirmationMode === 'pessoal' ? 'text-emerald-700' : 'text-slate-500'
+                          }`}
+                        />
+                        <strong className="text-xs text-slate-900">
+                          Modalidade A: Cliente Digita
+                        </strong>
+                      </div>
+                      {confirmationMode === 'pessoal' && (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      )}
                     </div>
                     <p className="text-[11px] text-slate-600">
-                      O cliente introduz diretamente o código de 6 dígitos no ecrã (computador, tablet ou telemóvel).
+                      O cliente introduz diretamente o código de 6 dígitos no ecrã.
                     </p>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setConfirmationMode('assistida')}
-                    className={`p-3.5 rounded-xl border text-left transition-all ${
+                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
                       confirmationMode === 'assistida'
-                        ? 'border-amber-600 bg-amber-50/70 shadow-xs'
+                        ? 'border-emerald-600 bg-emerald-50/70 ring-1 ring-emerald-600/20'
                         : 'border-slate-200 bg-white hover:bg-slate-50'
                     }`}
                   >
-                    <div className="flex items-center gap-2 mb-1">
-                      <UserCheck className={`w-4 h-4 ${confirmationMode === 'assistida' ? 'text-amber-700' : 'text-slate-500'}`} />
-                      <strong className="text-xs text-slate-900">Modalidade B: Introdução Assistida</strong>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-2">
+                        <UserCheck
+                          className={`w-4 h-4 ${
+                            confirmationMode === 'assistida'
+                              ? 'text-emerald-700'
+                              : 'text-slate-500'
+                          }`}
+                        />
+                        <strong className="text-xs text-slate-900">
+                          Modalidade B: Assistida
+                        </strong>
+                      </div>
+                      {confirmationMode === 'assistida' && (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      )}
                     </div>
                     <p className="text-[11px] text-slate-600">
-                      O cliente dita verbalmente o código recebido ao funcionário, com declaração de consentimento.
+                      O cliente dita o código ao funcionário mediante consentimento expresso.
                     </p>
                   </button>
                 </div>
@@ -1418,41 +1686,53 @@ ${itemsSummary}
 
               {/* Declaração obrigatória para Modalidade B */}
               {confirmationMode === 'assistida' && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-2">
+                <label
+                  htmlFor="assistedConsent"
+                  className={`block p-3.5 rounded-xl border text-xs space-y-1.5 cursor-pointer transition-colors ${
+                    assistedConsentGiven
+                      ? 'bg-emerald-50/70 border-emerald-300'
+                      : 'bg-white border-slate-300'
+                  }`}
+                >
                   <div className="flex items-center gap-2">
                     <input
                       type="checkbox"
                       id="assistedConsent"
                       checked={assistedConsentGiven}
                       onChange={e => setAssistedConsentGiven(e.target.checked)}
-                      className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500"
+                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
                     />
-                    <label htmlFor="assistedConsent" className="font-semibold text-slate-900">
+                    <span className="font-bold text-slate-900">
                       Declaração de Consentimento Verbal do Cliente
-                    </label>
+                    </span>
                   </div>
-                  <p className="text-[11px] text-slate-700 pl-6">
-                    "Declaro que o(a) cliente <strong>{customerName}</strong> esteve presente, conferiu o valor de <strong>{formatKwanza(totalCalculated)}</strong> e autorizou expressamente a introdução assistida do código SMS recebido no seu terminal."
+                  <p className="text-[11px] text-slate-700 pl-6 leading-relaxed">
+                    Declaro que o(a) cliente <strong>{customerName}</strong> conferiu o valor de{' '}
+                    <strong className="font-mono">{formatKwanza(totalCalculated)}</strong> e autorizou a introdução assistida do código recebido.
                   </p>
-                </div>
+                </label>
               )}
 
-              {/* Painel do Código de 6 Dígitos com Temporizador e Tentativas */}
-              <div className="border-2 border-slate-200 rounded-2xl p-6 text-center space-y-5 bg-white">
+              {/* Painel do Código de 6 Dígitos */}
+              <div className="border border-slate-200 rounded-2xl p-5 sm:p-6 text-center space-y-5 bg-white">
                 <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Validação Criptográfica de 6 Dígitos
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 inline-flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Validação de 6 Dígitos</span>
                   </span>
-                  <h4 className="text-base font-bold text-slate-900 mt-0.5">
-                    Introduza o Código Enviado por SMS
+                  <h4 className="text-base font-extrabold text-slate-900 mt-1">
+                    Introduza o Código de Confirmação
                   </h4>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Código válido por 5 minutos · Máximo de 5 tentativas de confirmação
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Válido por 5 minutos · Máximo de 5 tentativas
                   </p>
                 </div>
 
                 {/* 6 Digit Input Boxes */}
-                <div className="flex items-center justify-center gap-2 sm:gap-3" onPaste={handlePasteCode}>
+                <div
+                  className="flex items-center justify-center gap-2 sm:gap-3"
+                  onPaste={handlePasteCode}
+                >
                   {codeDigits.map((digit, idx) => (
                     <input
                       key={idx}
@@ -1471,61 +1751,74 @@ ${itemsSummary}
                         isBlocked
                           ? 'border-rose-300 bg-rose-50 text-rose-700 cursor-not-allowed'
                           : isExpired
-                          ? 'border-slate-300 bg-slate-100 text-slate-400 cursor-not-allowed'
+                          ? 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
                           : digit
-                          ? 'border-amber-600 bg-amber-50/50 text-slate-900 shadow-xs'
-                          : 'border-slate-300 bg-white text-slate-900 focus:border-amber-600 focus:ring-2 focus:ring-amber-500/20'
+                          ? 'border-emerald-600 bg-emerald-50/50 text-emerald-950 shadow-2xs'
+                          : 'border-slate-300 bg-white text-slate-900 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/20'
                       }`}
                     />
                   ))}
                 </div>
 
                 {/* Status Bar: Tempo Restante & Tentativas */}
-                <div className="flex flex-wrap items-center justify-center gap-6 text-xs pt-2">
+                <div className="flex flex-wrap items-center justify-center gap-5 text-xs pt-1">
                   <div className="flex items-center gap-1.5 font-medium text-slate-700">
-                    <Clock className={`w-4 h-4 ${secondsRemaining < 60 ? 'text-rose-600 animate-pulse' : 'text-slate-500'}`} />
-                    <span>Tempo restante: </span>
-                    <strong className={`font-mono text-sm ${secondsRemaining < 60 ? 'text-rose-700' : 'text-slate-900'}`}>
-                      {Math.floor(secondsRemaining / 60)}:{(secondsRemaining % 60).toString().padStart(2, '0')}
+                    <Clock
+                      className={`w-4 h-4 ${
+                        secondsRemaining < 60 ? 'text-rose-600' : 'text-emerald-700'
+                      }`}
+                    />
+                    <span>Tempo restante:</span>
+                    <strong
+                      className={`font-mono text-sm ${
+                        secondsRemaining < 60 ? 'text-rose-700' : 'text-slate-900'
+                      }`}
+                      data-tabular
+                    >
+                      {Math.floor(secondsRemaining / 60)}:
+                      {(secondsRemaining % 60).toString().padStart(2, '0')}
                     </strong>
                   </div>
 
-                  <div className="w-px h-4 bg-slate-300"></div>
+                  <div className="w-px h-4 bg-slate-200" />
 
                   <div className="flex items-center gap-1.5 font-medium text-slate-700">
                     <Lock className="w-4 h-4 text-slate-500" />
-                    <span>Tentativas restantes: </span>
-                    <strong className={`font-mono text-sm ${attemptsRemaining <= 2 ? 'text-rose-700' : 'text-slate-900'}`}>
+                    <span>Tentativas restantes:</span>
+                    <strong
+                      className={`font-mono text-sm ${
+                        attemptsRemaining <= 2 ? 'text-rose-700' : 'text-slate-900'
+                      }`}
+                      data-tabular
+                    >
                       {attemptsRemaining} de 5
                     </strong>
                   </div>
                 </div>
 
-                {/* Mensagens de Bloqueio ou Expiração */}
                 {isBlocked && (
-                  <div className="p-3 bg-rose-100 text-rose-900 rounded-xl text-xs font-semibold">
-                    🚫 Tentativas esgotadas por motivos de segurança. É necessário gerar um novo código SMS.
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold">
+                    Tentativas esgotadas por segurança. Gere um novo código SMS abaixo para continuar.
                   </div>
                 )}
 
                 {isExpired && !isBlocked && (
-                  <div className="p-3 bg-slate-100 text-slate-800 rounded-xl text-xs font-semibold">
-                    ⏳ O código de 5 minutos expirou. Clique em "Reenviar Novo Código SMS" para continuar.
+                  <div className="p-3 bg-slate-100 border border-slate-200 text-slate-800 rounded-xl text-xs font-semibold">
+                    O prazo de 5 minutos expirou. Clique em "Reenviar Novo Código SMS" para gerar outro código.
                   </div>
                 )}
 
-                {/* Botão de Reenvio com Cooldown */}
                 <div>
                   <button
                     type="button"
                     disabled={isSendingSMS || resendCooldown > 0}
                     onClick={handleSendConfirmationSMS}
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 disabled:text-slate-400 py-1 px-3 rounded-lg hover:bg-slate-100 transition-colors"
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-800 hover:text-emerald-950 disabled:text-slate-400 py-1.5 px-3 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer disabled:cursor-not-allowed"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>
                       {resendCooldown > 0
-                        ? `Aguarde ${resendCooldown}s para reenviar SMS`
+                        ? `Aguarde ${resendCooldown}s para reenviar`
                         : 'Reenviar Novo Código SMS'}
                     </span>
                   </button>
@@ -1536,13 +1829,13 @@ ${itemsSummary}
         </div>
 
         {/* Modal Footer Controls */}
-        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+        <div className="px-4 sm:px-6 py-3.5 bg-white border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div>
             {currentStep > 1 && (
               <button
                 type="button"
                 onClick={() => setCurrentStep(prev => (prev === 3 ? 2 : 1))}
-                className="inline-flex items-center gap-1 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer min-h-[40px]"
               >
                 <ArrowLeft className="w-4 h-4" />
                 <span>Voltar</span>
@@ -1553,19 +1846,19 @@ ${itemsSummary}
               <button
                 type="button"
                 onClick={handleDirectRegistrationWithoutSMS}
-                className="text-[11px] text-slate-500 hover:text-slate-700 underline"
-                title="Registar sem código SMS se o cliente estiver sem telemóvel"
+                className="text-xs font-semibold text-slate-500 hover:text-emerald-800 underline cursor-pointer py-2"
+                title="Registar diretamente sem enviar código SMS"
               >
-                Registo Direto (Sem confirmação SMS)
+                Gravar sem SMS
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 ml-auto">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+              className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer min-h-[40px]"
             >
               Cancelar
             </button>
@@ -1575,72 +1868,79 @@ ${itemsSummary}
               <button
                 type="button"
                 onClick={handleProceedToReview}
-                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-colors"
+                className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-98 rounded-xl shadow-xs transition-all cursor-pointer min-h-[40px]"
               >
-                <span>Conferir Compra & Resumo</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>Conferir Compra</span>
+                <ArrowRight className="w-4 h-4 text-emerald-200" />
               </button>
             )}
 
             {/* Step 2: Opções de Envio e Gravação Opcional */}
             {currentStep === 2 && (
-              <div className="flex flex-wrap items-center gap-2">
+              <>
                 <button
                   type="button"
                   onClick={handleDirectRegistrationWithoutSMS}
-                  className="px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer min-h-[40px]"
                   title="Grava a dívida diretamente sem envio de código"
                 >
-                  Gravar sem Código (Opcional)
+                  Gravar sem Código
                 </button>
 
                 <button
                   type="button"
                   disabled={isSendingSMS}
                   onClick={handleSendCodeViaWhatsApp}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-xl transition-colors disabled:opacity-50 cursor-pointer min-h-[40px]"
                   title="Abre o WhatsApp com o resumo e o código"
                 >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  <span>Enviar via WhatsApp</span>
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>WhatsApp</span>
                 </button>
 
                 <button
                   type="button"
                   disabled={isSendingSMS}
                   onClick={handleSendConfirmationSMS}
-                  className="inline-flex items-center gap-2 px-5 py-2 text-xs font-extrabold uppercase tracking-wider text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-md transition-all disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer min-h-[40px]"
                 >
-                  <Send className="w-4 h-4" />
-                  <span>{isSendingSMS ? 'A Enviar SMS...' : 'ENVIAR POR SMS'}</span>
+                  <Send className="w-3.5 h-3.5 text-emerald-200" />
+                  <span>{isSendingSMS ? 'A Enviar SMS...' : 'Enviar Código SMS'}</span>
                 </button>
-              </div>
+              </>
             )}
 
             {/* Step 3: Validar Código ou Gravar sem Validar (Opcional) */}
             {currentStep === 3 && (
-              <div className="flex flex-wrap items-center gap-2">
+              <>
                 <button
                   type="button"
                   onClick={handleSkipVerificationAndSave}
-                  className="px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer min-h-[40px]"
                   title="Grava a dívida com o código associado sem obrigar à digitação dos 6 dígitos"
                 >
-                  Gravar sem Validar (Opcional)
+                  Gravar sem Validar
                 </button>
 
                 <button
                   type="button"
-                  disabled={isVerifyingCode || fullEnteredCode.length !== 6 || isExpired || isBlocked}
+                  disabled={
+                    isVerifyingCode ||
+                    fullEnteredCode.length !== 6 ||
+                    isExpired ||
+                    isBlocked
+                  }
                   onClick={handleVerifyAndFinalize}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-extrabold uppercase tracking-wider text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg shadow-md transition-all disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed min-h-[40px]"
                 >
-                  <FileCheck2 className="w-4 h-4" />
+                  <FileCheck2 className="w-4 h-4 text-emerald-200" />
                   <span>
-                    {isVerifyingCode ? 'A Validar Código...' : 'Confirmar & Emitir Comprovativo'}
+                    {isVerifyingCode
+                      ? 'A Validar...'
+                      : 'Confirmar & Emitir Comprovativo'}
                   </span>
                 </button>
-              </div>
+              </>
             )}
           </div>
         </div>

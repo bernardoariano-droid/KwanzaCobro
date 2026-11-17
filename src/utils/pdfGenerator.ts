@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import { Debt, Client, Seller, CompanySettings } from '../types/debt';
 import { formatKwanza, formatDate, getRemainingBalance } from './formatters';
+import { resolveSystemLogo } from '../data/initialData';
 
 /**
  * Converte uma imagem da aplicação para string Base64 utilizável no jsPDF
@@ -58,29 +59,49 @@ export async function generateNeurojusCreditProofPDF(
   const marginX = 18;
   let cursorY = 12;
 
-  // 1. Carregar Logomarca Oficial NEUROJUS
-  const logoUrl = company.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg';
+  // 1. Carregar Logomarca Oficial do Sistema
+  const logoUrl = resolveSystemLogo(company.logoUrl);
   const logoBase64 = await loadBase64Image(logoUrl);
 
   if (logoBase64) {
     try {
-      doc.addImage(logoBase64, 'JPEG', marginX, cursorY, 50, 15);
-      
+      const imgFormat = logoBase64.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+      const { drawW, drawH } = await new Promise<{ drawW: number; drawH: number }>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxW = 54;
+          const maxH = 18;
+          const ratio = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 3;
+          let w = maxW;
+          let h = w / ratio;
+          if (h > maxH) {
+            h = maxH;
+            w = h * ratio;
+          }
+          resolve({ drawW: w, drawH: h });
+        };
+        img.onerror = () => resolve({ drawW: 45, drawH: 18 });
+        img.src = logoBase64;
+      });
+
+      doc.addImage(logoBase64, imgFormat, marginX, cursorY, drawW, drawH);
+
+      const textX = marginX + Math.max(drawW + 4, 54);
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8.5);
       doc.setTextColor(15, 23, 42);
-      doc.text('NEUROJUS', marginX + 54, cursorY + 4.5);
+      doc.text(company.name || 'KwanzaCobro', textX, cursorY + 4.5);
 
       doc.setFontSize(7.5);
-      doc.setTextColor(180, 83, 9); // amber-700
-      doc.text('SISTEMA INTEGRADO DE GESTÃO DE CRÉDITO & COBRANÇA', marginX + 54, cursorY + 8.5);
+      doc.setTextColor(4, 120, 87); // emerald-700
+      doc.text('SISTEMA INTEGRADO DE GESTÃO DE CRÉDITO & COBRANÇA', textX, cursorY + 8.5);
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7);
       doc.setTextColor(100, 116, 139);
-      doc.text('Emissão e Registo Eletrónico com Confirmação por SMS · República de Angola', marginX + 54, cursorY + 12.5);
+      doc.text('Emissão e Registo Eletrónico com Confirmação por SMS · República de Angola', textX, cursorY + 12.5);
 
-      cursorY += 18;
+      cursorY += Math.max(drawH + 4, 19);
     } catch {
       // Fallback em caso de erro na inserção da imagem
       doc.setFont('helvetica', 'bold');

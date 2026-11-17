@@ -28,6 +28,7 @@ import { CompanySettings, Seller, Client, Debt, Utilizador } from '../types/debt
 import { formatKwanza } from '../utils/formatters';
 import { TempSuperAdminPasswordModal } from './TempSuperAdminPasswordModal';
 import { fetchSupabaseSchemaSql, sanitizeAndValidateEmail } from '../lib/supabase';
+import { resolveSystemLogo } from '../data/initialData';
 
 function generateCompanyUuid(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -648,12 +649,13 @@ CREATE INDEX IF NOT EXISTS idx_audit_company ON public.audit_trail(company_id);`
                 {/* Topo do Card: Logomarca, Nome e Badges */}
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-600 to-emerald-800 text-white flex items-center justify-center font-bold text-lg shadow-xs overflow-hidden shrink-0 border border-emerald-200">
-                      {comp.logoUrl ? (
-                        <img src={comp.logoUrl} alt={comp.name} className="w-full h-full object-contain p-1 bg-white" />
-                      ) : (
-                        comp.name.slice(0, 2).toUpperCase()
-                      )}
+                    <div className="h-11 px-2 py-1 rounded-xl bg-white flex items-center justify-center shadow-xs overflow-hidden shrink-0 border border-emerald-200 max-w-[130px]">
+                      <img
+                        src={resolveSystemLogo(comp.logoUrl)}
+                        alt={comp.name}
+                        referrerPolicy="no-referrer"
+                        className="h-full w-auto object-contain"
+                      />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">

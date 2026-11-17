@@ -10,6 +10,7 @@ import {
   Utilizador,
   normalizeUserRole,
 } from '../types/debt';
+import { resolveSystemLogo } from '../data/initialData';
 
 // Função para sanitizar a URL fornecida pelo utilizador (remover /rest/v1/ se presente)
 export function sanitizeSupabaseUrl(rawUrl?: string): string {
@@ -921,7 +922,7 @@ export function mapCompanyFromSupabase(row: any, fallback?: CompanySettings): Co
     iban: row.iban || fallback?.iban || '',
     expressPhone: row.express_phone || fallback?.expressPhone || '',
     currency: row.currency || fallback?.currency || 'Kz',
-    logoUrl: row.logo_url || fallback?.logoUrl || '/assets/aistudio/IMG-20261010-WA0062_2b38905c.jpg',
+    logoUrl: resolveSystemLogo(row.logo_url || fallback?.logoUrl),
     penaltyPerDayRate: typeof row.penalty_per_day_rate === 'number' ? row.penalty_per_day_rate : (fallback?.penaltyPerDayRate || 0.1),
     daysBeforeDueAlert: typeof row.days_before_due_alert === 'number' ? row.days_before_due_alert : (fallback?.daysBeforeDueAlert || 5),
     autoAlertNotifications: typeof row.auto_alert_notifications === 'boolean' ? row.auto_alert_notifications : true,
